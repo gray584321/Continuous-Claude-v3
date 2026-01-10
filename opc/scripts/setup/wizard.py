@@ -14,7 +14,9 @@ Or run as a standalone script:
 
 import asyncio
 import json
+import platform
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -218,6 +220,64 @@ def confirm_feature_toggle(feature: str, current: bool, new: bool) -> bool:
     action = "enable" if new else "disable"
     response = input(f"  Are you sure you want to {action} {feature}? [y/N]: ")
     return response.strip().lower() == "y"
+
+
+def build_typescript_hooks(hooks_dir: Path) -> tuple[bool, str]:
+    """Build TypeScript hooks using npm.
+
+    Args:
+        hooks_dir: Path to hooks directory
+
+    Returns:
+        Tuple of (success, message)
+    """
+    # Check if hooks directory exists
+    if not hooks_dir.exists():
+        return True, "Hooks directory does not exist"
+
+    # Check if package.json exists
+    if not (hooks_dir / "package.json").exists():
+        return True, "No package.json found - no npm build needed"
+
+    # Find npm executable
+    npm_cmd = shutil.which("npm")
+    if npm_cmd is None:
+        if platform.system() == "Windows":
+            npm_cmd = shutil.which("npm.cmd")
+        if npm_cmd is None:
+            return False, "npm not found in PATH - TypeScript hooks will not be built"
+
+    try:
+        # Install dependencies
+        console.print("  Running npm install...")
+        result = subprocess.run(
+            [npm_cmd, "install"],
+            cwd=hooks_dir,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            return False, f"npm install failed: {result.stderr[:200]}"
+
+        # Build
+        console.print("  Running npm run build...")
+        result = subprocess.run(
+            [npm_cmd, "run", "build"],
+            cwd=hooks_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            return False, f"npm build failed: {result.stderr[:200]}"
+
+        return True, "TypeScript hooks built successfully"
+
+    except subprocess.TimeoutExpired:
+        return False, "npm command timed out"
+    except OSError as e:
+        return False, f"Failed to run npm: {e}"
 
 
 async def check_prerequisites() -> dict[str, Any]:
@@ -437,7 +497,8 @@ async def run_setup_wizard() -> None:
     if Confirm.ask("Start Docker stack (PostgreSQL, Redis)?", default=True):
         from scripts.setup.docker_setup import run_migrations, start_docker_stack, wait_for_services
 
-        result = await start_docker_stack()
+        console.print("  [dim]Starting Docker containers (first run downloads ~500MB, may take a few minutes)...[/dim]")
+        result = await start_docker_stack(env_file=env_path)
         if result["success"]:
             console.print("  [green]OK[/green] Docker stack started")
 
@@ -487,12 +548,12 @@ async def run_setup_wizard() -> None:
         backup_claude_dir,
         detect_existing_setup,
         generate_migration_guidance,
-        get_claude_dir,
+        get_global_claude_dir,
         get_opc_integration_source,
         install_opc_integration,
     )
 
-    claude_dir = get_claude_dir()
+    claude_dir = get_global_claude_dir()  # Use global ~/.claude, not project-local
     existing = detect_existing_setup(claude_dir)
 
     if existing.has_existing:
@@ -552,6 +613,16 @@ async def run_setup_wizard() -> None:
                     console.print(
                         f"  [green]OK[/green] Merged {len(result['merged_items'])} custom items"
                     )
+
+                # Build TypeScript hooks
+                console.print("  Building TypeScript hooks...")
+                hooks_dir = claude_dir / "hooks"
+                build_success, build_msg = build_typescript_hooks(hooks_dir)
+                if build_success:
+                    console.print(f"  [green]OK[/green] {build_msg}")
+                else:
+                    console.print(f"  [yellow]WARN[/yellow] {build_msg}")
+                    console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
             else:
                 console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
         else:
@@ -568,6 +639,16 @@ async def run_setup_wizard() -> None:
                 console.print(f"  [green]OK[/green] Installed {result['installed_rules']} rules")
                 console.print(f"  [green]OK[/green] Installed {result['installed_agents']} agents")
                 console.print(f"  [green]OK[/green] Installed {result['installed_servers']} MCP servers")
+
+                # Build TypeScript hooks
+                console.print("  Building TypeScript hooks...")
+                hooks_dir = claude_dir / "hooks"
+                build_success, build_msg = build_typescript_hooks(hooks_dir)
+                if build_success:
+                    console.print(f"  [green]OK[/green] {build_msg}")
+                else:
+                    console.print(f"  [yellow]WARN[/yellow] {build_msg}")
+                    console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
             else:
                 console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
 

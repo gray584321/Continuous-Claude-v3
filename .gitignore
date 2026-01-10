@@ -61,9 +61,6 @@ opc/scripts/archive/
 .claude/skills/_archived/
 .claude/agents/_archived/
 
-# Compiled hooks (rebuild with npm run build)
-.claude/hooks/dist/
-
 # OPC internal caches
 opc/.claude/cache/
 
