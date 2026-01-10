@@ -765,10 +765,27 @@ async def run_setup_wizard() -> None:
                             except Exception:
                                 pass
 
+                        # Detect GPU for model selection
+                        # BGE-large (1.3GB) needs GPU, MiniLM (80MB) works on CPU
+                        has_gpu = False
+                        try:
+                            import torch
+                            has_gpu = torch.cuda.is_available() or torch.backends.mps.is_available()
+                        except ImportError:
+                            pass  # No torch = assume no GPU
+
+                        if has_gpu:
+                            model = "bge-large-en-v1.5"
+                            timeout = 600  # 10 min with GPU
+                        else:
+                            model = "all-MiniLM-L6-v2"
+                            timeout = 300  # 5 min for small model
+                            console.print("  [dim]No GPU detected, using lightweight model[/dim]")
+
                         settings["semantic_search"] = {
                             "enabled": True,
                             "auto_reindex_threshold": threshold,
-                            "model": "bge-large-en-v1.5",
+                            "model": model,
                         }
 
                         settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -780,10 +797,10 @@ async def run_setup_wizard() -> None:
                             console.print("  Building semantic index (may take a few minutes)...")
                             try:
                                 index_result = subprocess.run(
-                                    ["tldr", "semantic", "index", str(Path.cwd())],
+                                    ["tldr", "semantic", "index", str(Path.cwd()), "--model", model],
                                     capture_output=True,
                                     text=True,
-                                    timeout=600,  # 10 min max
+                                    timeout=timeout,
                                 )
                                 if index_result.returncode == 0:
                                     console.print("  [green]OK[/green] Semantic index built")
