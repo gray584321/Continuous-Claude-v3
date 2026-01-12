@@ -236,7 +236,8 @@ function checkMemoryRelevance(intent, projectDir) {
       count: data.results.length,
       results
     };
-  } catch {
+  } catch (error) {
+    console.error("[memory-awareness] Failed to check memory relevance:", error instanceof Error ? error.message : String(error));
     return null;
   }
 }

@@ -119,6 +119,24 @@ Examples:
     )
 
     parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Run full update including uv sync, npm update, docker check",
+    )
+
+    parser.add_argument(
+        "--migrate-only",
+        action="store_true",
+        help="Run database migrations only (skip other update steps)",
+    )
+
+    parser.add_argument(
+        "--docker-auto",
+        action="store_true",
+        help="Auto-start Docker PostgreSQL, wait for healthy, run migrations",
+    )
+
+    parser.add_argument(
         "command",
         nargs="?",
         choices=["validate"],
@@ -425,11 +443,394 @@ def check_typescript_files_changed(hooks_dir: Path) -> bool:
     return False
 
 
+# =============================================================================
+# Docker Health Check
+# =============================================================================
+
+def check_docker_postgres(
+    force_restart: bool = False,
+    verbose: bool = False,
+) -> tuple[bool, str]:
+    """Check if PostgreSQL container is running and healthy.
+
+    Args:
+        force_restart: Force restart the container
+        verbose: Show detailed output
+
+    Returns:
+        Tuple of (success, message)
+    """
+    import time
+
+    try:
+        # Check if docker is available
+        docker_cmd = shutil.which("docker")
+        if not docker_cmd:
+            return False, "Docker not found"
+
+        # Check if container exists
+        result = subprocess.run(
+            [docker_cmd, "ps", "-a", "--filter", "name=continuous-claude-postgres", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        if result.returncode != 0:
+            return False, f"Docker command failed: {result.stderr[:100]}"
+
+        container_name = result.stdout.strip()
+
+        if not container_name:
+            return False, "PostgreSQL container not found"
+
+        # Check container status
+        result = subprocess.run(
+            [docker_cmd, "inspect", "--format", "{{.State.Status}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        if result.returncode != 0:
+            return False, f"Failed to inspect container: {result.stderr[:100]}"
+
+        status = result.stdout.strip()
+
+        if status == "running":
+            # Check if healthy
+            healthy_result = subprocess.run(
+                [docker_cmd, "inspect", "--format", "{{.State.Health.Status}}", container_name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            healthy = healthy_result.stdout.strip() if healthy_result.returncode == 0 else "unknown"
+
+            if healthy == "healthy" and not force_restart:
+                return True, f"PostgreSQL is healthy"
+
+            if force_restart:
+                if verbose:
+                    console.print("  [dim]Force restart requested, restarting container...[/dim]")
+            else:
+                if verbose:
+                    console.print(f"  [dim]PostgreSQL status: {healthy}, restarting...[/dim]")
+
+        elif status != "running":
+            if verbose:
+                console.print(f"  [dim]PostgreSQL not running (status: {status}), starting...[/dim]")
+
+        # Restart/start the container
+        if force_restart or status != "running":
+            # Stop if running
+            subprocess.run(
+                [docker_cmd, "stop", container_name],
+                capture_output=True,
+                timeout=30,
+            )
+
+            # Start container
+            result = subprocess.run(
+                [docker_cmd, "start", container_name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode != 0:
+                return False, f"Failed to start container: {result.stderr[:100]}"
+
+            # Wait for healthy
+            max_wait = 60
+            waited = 0
+            while waited < max_wait:
+                time.sleep(2)
+                waited += 2
+
+                status_result = subprocess.run(
+                    [docker_cmd, "inspect", "--format", "{{.State.Health.Status}}", container_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if status_result.returncode == 0 and status_result.stdout.strip() == "healthy":
+                    return True, "PostgreSQL container restarted and healthy"
+
+            return True, "PostgreSQL container restarted"
+
+        return True, "PostgreSQL is healthy"
+
+    except subprocess.TimeoutExpired:
+        return False, "Docker command timed out"
+    except FileNotFoundError:
+        return False, "Docker not found"
+    except Exception as e:
+        return False, str(e)
+
+
+# =============================================================================
+# Python Dependencies Update
+# =============================================================================
+
+def update_python_deps(opc_dir: Path, verbose: bool = False, force: bool = False) -> tuple[bool, str]:
+    """Run uv sync to update Python dependencies.
+
+    Args:
+        opc_dir: Path to opc directory
+        verbose: Show detailed output
+        force: Always run even if no changes detected
+
+    Returns:
+        Tuple of (success, message)
+    """
+    pyproject = opc_dir / "pyproject.toml"
+    if not pyproject.exists():
+        return False, "pyproject.toml not found"
+
+    try:
+        # Check if pyproject.toml has changed by comparing modification times
+        uv_lock = opc_dir / ".uv" / "pyproject.toml"
+        needs_update = force
+
+        if not force and uv_lock.exists():
+            # Check if pyproject.toml is newer than lock file
+            if pyproject.stat().st_mtime > uv_lock.stat().st_mtime:
+                needs_update = True
+
+        if not needs_update:
+            return False, "Dependencies already up to date"
+
+        if verbose:
+            console.print("  [dim]Updating Python dependencies...[/dim]")
+
+        # Run uv sync
+        result = subprocess.run(
+            ["uv", "sync"],
+            cwd=opc_dir,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        if result.returncode != 0:
+            return False, f"uv sync failed: {result.stderr[:200]}"
+
+        # Check if anything actually changed
+        if "Nothing to do" in result.stdout or "Already up to date" in result.stdout:
+            return False, "Dependencies already up to date"
+
+        return True, "Python dependencies updated"
+
+    except subprocess.TimeoutExpired:
+        return False, "uv sync timed out"
+    except FileNotFoundError:
+        return False, "uv not found"
+    except Exception as e:
+        return False, str(e)
+
+
+# =============================================================================
+# NPM Package Updates
+# =============================================================================
+
+def update_npm_deps(hooks_dir: Path, verbose: bool = False, force: bool = False) -> tuple[bool, str]:
+    """Update npm packages before building hooks.
+
+    Args:
+        hooks_dir: Path to hooks directory
+        verbose: Show detailed output
+        force: Always run npm update
+
+    Returns:
+        Tuple of (success, message)
+    """
+    package_json = hooks_dir / "package.json"
+    if not package_json.exists():
+        return False, "No package.json found"
+
+    npm_cmd = shutil.which("npm")
+    if not npm_cmd:
+        return False, "npm not found"
+
+    try:
+        # Check if package.json or package-lock.json has changed
+        needs_update = force
+        lock_file = hooks_dir / "package-lock.json"
+
+        if not force and lock_file.exists():
+            if package_json.stat().st_mtime > lock_file.stat().st_mtime:
+                needs_update = True
+
+        if not needs_update:
+            return False, "NPM dependencies already up to date"
+
+        if verbose:
+            console.print("  [dim]Updating NPM dependencies...[/dim]")
+
+        # Run npm update
+        result = subprocess.run(
+            [npm_cmd, "update"],
+            cwd=hooks_dir,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        if result.returncode != 0:
+            return False, f"npm update failed: {result.stderr[:200]}"
+
+        # Check if anything changed
+        if "added" in result.stdout.lower() or "updated" in result.stdout.lower():
+            return True, "NPM dependencies updated"
+        elif "no packages updated" in result.stdout.lower():
+            return False, "NPM dependencies already up to date"
+
+        return True, "NPM dependencies updated"
+
+    except subprocess.TimeoutExpired:
+        return False, "npm update timed out"
+    except Exception as e:
+        return False, str(e)
+
+
+# =============================================================================
+# TLDR Index Rebuild
+# =============================================================================
+
+def rebuild_tldr_index(
+    project_root: Path,
+    force: bool = False,
+    verbose: bool = False,
+) -> tuple[bool, str]:
+    """Rebuild TLDR symbol index if hooks/scripts changed.
+
+    Args:
+        project_root: Path to project root
+        force: Force reindex even if no changes detected
+        verbose: Show detailed output
+
+    Returns:
+        Tuple of (success, message)
+    """
+    try:
+        # Check if tldr is available
+        tldr_cmd = shutil.which("tldr")
+        if not tldr_cmd:
+            return False, "tldr not found"
+
+        # Check if we should reindex based on file changes
+        if not force:
+            # Check if .claude files changed (hooks, skills, agents, rules, servers)
+            claude_dir = project_root / ".claude"
+            if claude_dir.exists():
+                last_index = project_root / ".tldr_index_timestamp"
+                last_modified = 0
+
+                for f in claude_dir.rglob("*"):
+                    if f.is_file():
+                        last_modified = max(last_modified, f.stat().st_mtime)
+
+                if last_index.exists():
+                    last_index_time = last_index.stat().st_mtime
+                    if last_modified <= last_index_time:
+                        return False, "TLDR index up to date"
+
+        if verbose:
+            console.print("  [dim]Rebuilding TLDR index...[/dim]")
+
+        # Run tldr reindex
+        result = subprocess.run(
+            [tldr_cmd, "reindex"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            # Try semantic reindex as fallback
+            result = subprocess.run(
+                [tldr_cmd, "semantic", "reindex"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+
+            if result.returncode != 0:
+                return False, f"TLDR reindex failed: {result.stderr[:200]}"
+
+        # Update timestamp file
+        timestamp_file = project_root / ".tldr_index_timestamp"
+        timestamp_file.touch()
+
+        return True, "TLDR index rebuilt"
+
+    except subprocess.TimeoutExpired:
+        return False, "TLDR reindex timed out"
+    except Exception as e:
+        return False, str(e)
+
+
+# =============================================================================
+# Cache Invalidation
+# =============================================================================
+
+def invalidate_cache(
+    pattern: str | None = None,
+    verbose: bool = False,
+) -> tuple[bool, str]:
+    """Clear cache directories when relevant files change.
+
+    Args:
+        pattern: Optional pattern to match specific caches to clear
+        verbose: Show detailed output
+
+    Returns:
+        Tuple of (success, message)
+    """
+    cleared = []
+
+    # Define cache directories to check
+    cache_dirs = [
+        Path.home() / ".cache" / "tldr",
+        Path.home() / ".cache" / "llm-tldr",
+        Path.home() / ".cache" / "tldr-code",
+    ]
+
+    # Add project-specific caches if within project
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    cache_dirs.extend([
+        project_root / ".tldr_cache",
+        project_root / ".tldr_index",
+    ])
+
+    for cache_dir in cache_dirs:
+        if cache_dir.exists():
+            try:
+                # Only clear if pattern matches or no pattern specified
+                if pattern is None or pattern.lower() in str(cache_dir).lower():
+                    if verbose:
+                        console.print(f"  [dim]Clearing cache: {cache_dir}[/dim]")
+                    shutil.rmtree(cache_dir)
+                    cleared.append(str(cache_dir))
+            except Exception as e:
+                if verbose:
+                    console.print(f"  [yellow]Could not clear {cache_dir}: {e}[/yellow]")
+
+    if cleared:
+        return True, f"Cleared {len(cleared)} cache directory(ies)"
+    else:
+        return True, "No caches to clear"
+
+
 def run_update_mode(
     dry_run: bool = False,
     force: bool = False,
     verbose: bool = False,
     skip_git: bool = False,
+    full_update: bool = False,
 ) -> dict[str, Any]:
     """Run the update mode - pull latest and sync changes.
 
@@ -438,6 +839,7 @@ def run_update_mode(
         force: If True, skip confirmations
         verbose: If True, show detailed output
         skip_git: If True, skip git pull
+        full_update: Run full update including uv sync, npm update, docker check
 
     Returns:
         Dict with update results
@@ -474,9 +876,52 @@ def run_update_mode(
         else:
             console.print("  [dim]Skipping git pull (--skip-git)[/dim]")
 
+        # Step 1.5: Docker PostgreSQL health check (full update mode)
+        if full_update:
+            console.print("\n[bold]Step 1.5/9: Checking Docker PostgreSQL...[/bold]")
+            success, msg = check_docker_postgres(force_restart=False, verbose=verbose)
+            if success:
+                console.print(f"  [green]OK[/green] {msg}")
+            else:
+                console.print(f"  [yellow]WARN[/yellow] {msg}")
+
+        # Step 2: Run database migrations
+        console.print("\n[bold]Step 2/9: Running database migrations...[/bold]")
+        try:
+            from scripts.migrations.migration_manager import MigrationManager
+
+            manager = MigrationManager()
+            pending = manager.get_pending_migrations()
+
+            if pending:
+                console.print(f"  [bold]{len(pending)}[/bold] pending migration(s)...")
+                import asyncio
+
+                mig_result = asyncio.run(manager.apply_all())
+                if mig_result["applied"]:
+                    console.print(f"  [green]Applied:[/green] {', '.join(mig_result['applied'])}")
+                if mig_result["skipped"]:
+                    console.print(f"  [yellow]Skipped:[/yellow] {', '.join(mig_result['skipped'])}")
+                if mig_result["failed"]:
+                    console.print(f"  [yellow]WARN[/yellow] Some migrations failed: {mig_result['error']}")
+            else:
+                console.print("  [dim]All migrations up to date[/dim]")
+        except Exception as e:
+            console.print(f"  [yellow]WARN[/yellow] Could not run migrations: {e}")
+            console.print("  [dim]Database may not be available. Continue with file sync...[/dim]")
+
+        # Step 3: Update Python dependencies (uv sync) - full update mode
+        if full_update:
+            console.print("\n[bold]Step 3/9: Updating Python dependencies...[/bold]")
+            success, msg = update_python_deps(opc_root, verbose=verbose)
+            if success:
+                console.print(f"  [green]OK[/green] {msg}")
+            else:
+                console.print(f"  [dim]{msg}[/dim]")
+
         console.print("\n[bold]Syncing integration files...[/bold]")
 
-        # Step 2: Sync hooks
+        # Step 4: Sync hooks
         console.print("\n  [bold]Hooks:[/bold]")
         sync_directory_update(
             opc_source / "hooks",
@@ -488,7 +933,7 @@ def run_update_mode(
             verbose=verbose,
         )
 
-        # Step 3: Sync skills
+        # Step 5: Sync skills
         console.print("\n  [bold]Skills:[/bold]")
         sync_directory_update(
             opc_source / "skills",
@@ -499,7 +944,7 @@ def run_update_mode(
             verbose=verbose,
         )
 
-        # Step 4: Sync rules
+        # Step 6: Sync rules
         console.print("\n  [bold]Rules:[/bold]")
         sync_directory_update(
             opc_source / "rules",
@@ -511,7 +956,7 @@ def run_update_mode(
             verbose=verbose,
         )
 
-        # Step 5: Sync agents
+        # Step 7: Sync agents
         console.print("\n  [bold]Agents:[/bold]")
         sync_directory_update(
             opc_source / "agents",
@@ -523,7 +968,7 @@ def run_update_mode(
             verbose=verbose,
         )
 
-        # Step 6: Sync servers (MCP tool wrappers)
+        # Step 8: Sync servers (MCP tool wrappers)
         console.print("\n  [bold]Servers:[/bold]")
         sync_directory_update(
             opc_source / "servers",
@@ -534,7 +979,19 @@ def run_update_mode(
             verbose=verbose,
         )
 
-        # Step 7: Sync settings.json
+        # Step 9: Update NPM dependencies (npm update) - full update mode
+        if full_update:
+            console.print("\n[bold]Step 9/9: Updating NPM dependencies...[/bold]")
+            success, msg = update_npm_deps(claude_dir / "hooks", verbose=verbose)
+            if success:
+                console.print(f"  [green]OK[/green] {msg}")
+            else:
+                console.print(f"  [dim]{msg}[/dim]")
+
+        # Step 10: Apply file updates (settings, scripts)
+        console.print("\n[bold]Step 10/9: Applying file updates...[/bold]")
+
+        # Sync settings.json
         opc_settings = opc_source / "settings.json"
         dst_settings = claude_dir / "settings.json"
         if opc_settings.exists():
@@ -548,7 +1005,7 @@ def run_update_mode(
                 verbose=verbose,
             )
 
-        # Step 8: Sync scripts/core/
+        # Sync scripts/core/
         console.print("\n  [bold]Scripts (core):[/bold]")
         sync_directory_update(
             opc_root / "scripts" / "core",
@@ -560,7 +1017,7 @@ def run_update_mode(
             verbose=verbose,
         )
 
-        # Step 9: Sync scripts/mathlib/
+        # Sync scripts/mathlib/
         console.print("\n  [bold]Scripts (mathlib):[/bold]")
         sync_directory_update(
             opc_root / "scripts" / "mathlib",
@@ -572,7 +1029,7 @@ def run_update_mode(
             verbose=verbose,
         )
 
-        # Step 10: Sync scripts/tldr/
+        # Sync scripts/tldr/
         console.print("\n  [bold]Scripts (tldr):[/bold]")
         sync_directory_update(
             opc_root / "scripts" / "tldr",
@@ -584,9 +1041,39 @@ def run_update_mode(
             verbose=verbose,
         )
 
-        # Step 11: Rebuild TypeScript hooks if needed
+        # Step 11: TLDR update + index rebuild - full update mode
+        if full_update:
+            console.print("\n[bold]Step 11/9: Checking TLDR updates...[/bold]")
+            try:
+                from scripts.setup.update import check_tldr_update, rebuild_tldr_index
+
+                updated, msg = check_tldr_update(verbose=verbose)
+                if updated:
+                    console.print(f"  [green]OK[/green] {msg}")
+                else:
+                    console.print(f"  [dim]{msg}[/dim]")
+
+                # Rebuild index
+                success, msg = rebuild_tldr_index(project_root, force=False, verbose=verbose)
+                if success:
+                    console.print(f"  [green]OK[/green] {msg}")
+                else:
+                    console.print(f"  [dim]{msg}[/dim]")
+            except Exception as e:
+                console.print(f"  [yellow]WARN[/yellow] TLDR update failed: {e}")
+
+            # Invalidate cache
+            console.print("\n[bold]Step 12/9: Invalidating cache...[/bold]")
+            success, msg = invalidate_cache(pattern="tldr", verbose=verbose)
+            if success:
+                console.print(f"  [green]OK[/green] {msg}")
+            else:
+                console.print(f"  [dim]{msg}[/dim]")
+
+        # Step 13: Rebuild TypeScript hooks if needed
+        console.print("\n[bold]Step 13/9: Rebuilding TypeScript hooks...[/bold]")
         if check_typescript_files_changed(claude_dir / "hooks"):
-            console.print("\n[bold]TypeScript hooks detected...[/bold]")
+            console.print("  TypeScript hooks detected...")
             if dry_run:
                 console.print("  [yellow]Would rebuild TypeScript hooks[/yellow]")
             else:
@@ -597,6 +1084,8 @@ def run_update_mode(
                 else:
                     console.print(f"  [yellow]WARN[/yellow] {msg}")
                     console.print("  [dim]Build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+        else:
+            console.print("  [dim]No TypeScript changes detected, skipping build[/dim]")
 
         # Show summary
         console.print("\n" + "=" * 60)
@@ -618,6 +1107,9 @@ def run_update_mode(
 
         console.print(f"  Files changed: {changes}")
         console.print(f"  Files unchanged: {unchanged}")
+
+        if full_update:
+            console.print("  [dim](Full update mode - dependencies also checked)[/dim]")
 
         if changes > 0:
             console.print("\n  [bold]Changed files:[/bold]")
@@ -1955,6 +2447,69 @@ def run_validate_mode(json_output: bool = False) -> dict:
     return results
 
 
+def run_migration_mode(verbose: bool = False) -> dict[str, Any]:
+    """Run database migrations only (for --migrate-only mode).
+
+    Args:
+        verbose: If True, show detailed output
+
+    Returns:
+        Dict with migration results
+    """
+    try:
+        from scripts.migrations.migration_manager import MigrationManager
+
+        console.print(Panel.fit("[bold]OPC v3 - DATABASE MIGRATIONS[/bold]", border_style="green"))
+
+        console.print("\n[bold]Discovering migrations...[/bold]")
+
+        manager = MigrationManager()
+        migrations = manager.get_migrations()
+
+        if not migrations:
+            console.print("  [yellow]No migration files found[/yellow]")
+            return {"success": True, "applied": [], "skipped": [], "message": "No migrations found"}
+
+        console.print(f"  Found {len(migrations)} migration(s)")
+
+        # Get pending migrations
+        pending = manager.get_pending_migrations()
+        console.print(f"  [bold]{len(pending)}[/bold] pending migration(s)")
+
+        if pending:
+            console.print("\n[bold]Applying migrations...[/bold]")
+        else:
+            console.print("\n[bold]All migrations already applied[/bold]")
+
+        # Run migrations
+        import asyncio
+
+        result = asyncio.run(manager.apply_all())
+
+        # Show results
+        if result["applied"]:
+            console.print(f"  [green]Applied:[/green] {', '.join(result['applied'])}")
+
+        if result["skipped"]:
+            console.print(f"  [yellow]Skipped (already applied):[/yellow] {', '.join(result['skipped'])}")
+
+        if result["failed"]:
+            for failure in result["failed"]:
+                console.print(f"  [red]Failed:[/red] {failure['migration_id']} - {failure['error']}")
+            return {"success": False, "error": result["error"]}
+
+        console.print("\n[bold green]All migrations completed successfully![/bold green]")
+        return result
+
+    except ImportError as e:
+        console.print(f"\n[red]Error importing migration module: {e}[/red]")
+        console.print("  Make sure the migration framework is installed.")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        console.print(f"\n[red]Migration error: {e}[/red]")
+        return {"success": False, "error": str(e)}
+
+
 async def main():
     """Entry point for the setup wizard."""
     args = parse_args()
@@ -1974,9 +2529,40 @@ async def main():
             force=args.force,
             verbose=args.verbose,
             skip_git=args.skip_git,
+            full_update=args.full,
         )
         if not result["success"]:
             sys.exit(1)
+
+    elif args.migrate_only:
+        # Run migrations only (synchronous)
+        result = run_migration_mode(verbose=args.verbose)
+        if not result["success"]:
+            sys.exit(1)
+
+    elif args.docker_auto:
+        # Run Docker auto-connect mode
+        from scripts.integration.docker_auto_connect import auto_connect
+
+        console.print(
+            Panel.fit("[bold]OPC v3 - DOCKER AUTO-CONNECT[/bold]", border_style="green")
+        )
+
+        status = await auto_connect(
+            start_if_stopped=True,
+            wait_for_healthy=True,
+            run_migrations_flag=True,
+            set_env=True,
+            verbose=True,
+        )
+
+        if status.database_reachable:
+            console.print("\n[bold green]PostgreSQL is ready![/bold green]")
+            sys.exit(0)
+        else:
+            console.print(f"\n[red]ERROR[/red] {status.error or 'PostgreSQL not available'}")
+            sys.exit(1)
+
     else:
         # Run interactive install wizard
         try:

@@ -10,10 +10,13 @@ This script is called by the SessionStart hook and must:
 Environment Variables:
     TEMPORAL_CHECKPOINT_PATH: Override default checkpoint path
     TEMPORAL_PROJECTS_DIR: Override default projects directory
+    TLDR_INDEX_DB: Override TLDR index database path
+    CLAUDE_PROJECT_DIR: Project directory for symbol indexing
 
 Usage:
     python index_incremental.py [--dry-run]
     python index_incremental.py --hook  # Background mode for Claude hook
+    python index_incremental.py --tldr  # Run TLDR symbol indexing
 """
 
 from __future__ import annotations
@@ -33,6 +36,12 @@ if TYPE_CHECKING:
 # Default paths - can be overridden by env vars
 DEFAULT_CHECKPOINT_PATH = Path.home() / ".claude/cache/temporal-memory/checkpoint.json"
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude/projects"
+DEFAULT_TLDR_INDEX_DB = Path.home() / ".claude" / "cache" / "tldr-index.db"
+
+# Add scripts directory to path for imports
+_SCRIPT_DIR = Path(__file__).parent.parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 
 def get_checkpoint_path() -> Path:
@@ -49,6 +58,22 @@ def get_projects_dir() -> Path:
     if env_path:
         return Path(env_path)
     return DEFAULT_PROJECTS_DIR
+
+
+def get_tldr_index_db() -> Path:
+    """Get TLDR index database path."""
+    env_path = os.environ.get("TLDR_INDEX_DB")
+    if env_path:
+        return Path(env_path)
+    return DEFAULT_TLDR_INDEX_DB
+
+
+def get_project_dir() -> Path:
+    """Get project directory from env or default."""
+    env_path = os.environ.get("CLAUDE_PROJECT_DIR")
+    if env_path:
+        return Path(env_path)
+    return Path.cwd()
 
 
 def quick_check(
@@ -114,6 +139,153 @@ def quick_check(
     return False
 
 
+def _get_current_commit() -> str | None:
+    """Get the current git commit hash."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(get_project_dir()),
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+    return None
+
+
+def _get_modified_files(commit: str) -> list[str]:
+    """Get files modified since a given commit."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", commit],
+            cwd=str(get_project_dir()),
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+    return []
+
+
+def _get_file_hash(file_path: str) -> str:
+    """Get MD5 hash of a file."""
+    import hashlib
+    try:
+        with open(file_path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _run_tldr_indexer(dry_run: bool = False) -> None:
+    """Run the TLDR symbol indexer.
+
+    Args:
+        dry_run: If True, check but don't index
+    """
+    from scripts.tldr.index_db import TldrIndexDb, DatabaseConnection, FileIndexState, IndexState
+
+    project_dir = get_project_dir()
+    db_path = get_tldr_index_db()
+    project_path = str(project_dir.resolve())
+
+    # Initialize database
+    index_db = TldrIndexDb(DatabaseConnection(db_path))
+
+    # Get current state
+    current_commit = _get_current_commit()
+    state = index_db.get_index_state()
+
+    if state and state.last_commit and state.last_commit == current_commit:
+        # No changes since last index
+        print(f"TLDR index up to date (commit: {current_commit[:8] if current_commit else 'unknown'})", file=sys.stderr)
+        index_db.close()
+        return
+
+    last_commit = state.last_commit if state else None
+
+    if dry_run:
+        print(f"Dry run: would index from {last_commit[:8] if last_commit else 'initial'} to {current_commit[:8] if current_commit else 'unknown'}", file=sys.stderr)
+        index_db.close()
+        return
+
+    # Get modified files
+    if last_commit:
+        modified_files = _get_modified_files(last_commit)
+    else:
+        # Full reindex needed - all files
+        modified_files = []
+
+    print(f"TLDR: Current commit: {current_commit[:8] if current_commit else 'unknown'}", file=sys.stderr)
+    print(f"TLDR: Modified files: {len(modified_files)}", file=sys.stderr)
+
+    # Index modified files
+    from scripts.tldr.tldr_api import scan_project_files, extract_file
+
+    all_files = scan_project_files(str(project_dir))
+    symbol_count = 0
+    indexed_files = 0
+
+    for file_path in all_files:
+        file_path_obj = Path(file_path)
+        rel_path = str(file_path_obj.resolve())
+
+        # Check if file needs indexing
+        needs_index = False
+        if modified_files:
+            # Only index modified files
+            for mod in modified_files:
+                if rel_path.endswith(mod):
+                    needs_index = True
+                    break
+        else:
+            # Full index or file not in DB
+            needs_index = True
+
+        if not needs_index:
+            continue
+
+        # Get file hash
+        file_hash = _get_file_hash(file_path)
+
+        # Extract symbols
+        try:
+            result = extract_file(file_path)
+            symbols = len(result.get("functions", [])) + len(result.get("classes", []))
+            symbol_count += symbols
+            indexed_files += 1
+
+            # Update database
+            file_state = FileIndexState(
+                project_path=project_path,
+                file_path=rel_path,
+                file_hash=file_hash,
+                last_indexed_commit=current_commit,
+            )
+            index_db.set_file_state(file_state)
+        except Exception as e:
+            print(f"Warning: could not index {file_path}: {e}", file=sys.stderr)
+
+    # Update global state
+    new_state = IndexState(
+        last_commit=current_commit,
+        last_indexed_at=datetime.now(),
+        total_files=indexed_files,
+        total_symbols=symbol_count
+    )
+    index_db.set_index_state(new_state)
+
+    print(f"TLDR: Indexed {symbol_count} symbols from {indexed_files} files", file=sys.stderr)
+
+    index_db.close()
+
+
 def _run_indexer(dry_run: bool = False, timeout: int = 10) -> None:
     """Run the indexer logic.
 
@@ -172,9 +344,19 @@ def main() -> None:
         action="store_true",
         help="Hook mode: background self, return immediately (replaces index-sessions.sh)",
     )
+    parser.add_argument(
+        "--tldr",
+        action="store_true",
+        help="Run TLDR symbol indexing instead of temporal indexing",
+    )
 
     try:
         args = parser.parse_args()
+
+        if args.tldr:
+            # Run TLDR symbol indexer
+            _run_tldr_indexer(dry_run=args.dry_run)
+            return
 
         if args.hook:
             # Hook mode: spawn background process and return immediately

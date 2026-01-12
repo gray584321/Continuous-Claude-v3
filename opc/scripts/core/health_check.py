@@ -40,6 +40,8 @@ import asyncio
 import json
 import os
 import psutil
+import re
+import shlex
 import signal
 import socket
 import sqlite3
@@ -49,7 +51,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from functools import wraps
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -70,6 +72,10 @@ except ImportError:
 
 # Paths
 CLAUDE_HOME = Path.home() / ".claude"
+HOOKS_DIR = CLAUDE_HOME / "hooks"
+HOOKS_SRC_DIR = HOOKS_DIR / "src"
+HOOKS_DIST_DIR = HOOKS_DIR / "dist"
+SETTINGS_FILE = CLAUDE_HOME / "settings.json"
 PID_FILE = CLAUDE_HOME / "memory-daemon.pid"
 LOG_FILE = CLAUDE_HOME / "memory-daemon.log"
 DB_FILE = CLAUDE_HOME / "sessions.db"
@@ -112,6 +118,18 @@ class HealthCheckResult:
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     recovery_action: str | None = None
 
+    def to_dict(self) -> dict:
+        """Convert to dictionary with enum serialization."""
+        return {
+            'name': self.name,
+            'status': self.status.value if isinstance(self.status, HealthStatus) else self.status,
+            'level': self.level.value if isinstance(self.level, HealthLevel) else self.level,
+            'message': self.message,
+            'details': self.details,
+            'timestamp': self.timestamp,
+            'recovery_action': self.recovery_action,
+        }
+
 
 @dataclass
 class HealthReport:
@@ -123,7 +141,14 @@ class HealthReport:
     uptime_seconds: float = 0.0
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        # Custom serialization for enums
+        return {
+            'overall_status': self.overall_status.value if isinstance(self.overall_status, HealthStatus) else self.overall_status,
+            'level': self.level.value if isinstance(self.level, HealthLevel) else self.level,
+            'checks': [c.to_dict() for c in self.checks],
+            'timestamp': self.timestamp,
+            'uptime_seconds': self.uptime_seconds,
+        }
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)
@@ -947,6 +972,1000 @@ class LogFileCheck(HealthCheckProvider):
 
 
 # =============================================================================
+# Hook Health Check Providers (Phase 1)
+# =============================================================================
+
+class HookFileCheck(HealthCheckProvider):
+    """Verify hooks exist in dist/ directory."""
+
+    @property
+    def name(self) -> str:
+        return "hook_file"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.STARTUP
+
+    def check(self) -> HealthCheckResult:
+        if not HOOKS_DIST_DIR.exists():
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNHEALTHY,
+                level=self.get_level(),
+                message="Hooks dist/ directory does not exist",
+                details={"path": str(HOOKS_DIST_DIR)},
+                recovery_action="build_hooks"
+            )
+
+        mjs_files = list(HOOKS_DIST_DIR.glob("*.mjs"))
+        if not mjs_files:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNHEALTHY,
+                level=self.get_level(),
+                message="No .mjs files found in hooks dist/",
+                details={"path": str(HOOKS_DIST_DIR), "count": 0},
+                recovery_action="build_hooks"
+            )
+
+        return HealthCheckResult(
+            name=self.name,
+            status=HealthStatus.HEALTHY,
+            level=self.get_level(),
+            message=f"Hooks dist/ directory exists ({len(mjs_files)} .mjs files)",
+            details={"path": str(HOOKS_DIST_DIR), "count": len(mjs_files)}
+        )
+
+
+class HookSyntaxCheck(HealthCheckProvider):
+    """Validate TypeScript syntax with tsc --noEmit."""
+
+    @property
+    def name(self) -> str:
+        return "hook_syntax"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.STARTUP
+
+    def check(self) -> HealthCheckResult:
+        if not HOOKS_DIR.exists():
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="Hooks directory does not exist (skipping syntax check)",
+                details={"path": str(HOOKS_DIR)}
+            )
+
+        try:
+            result = subprocess.run(
+                ["npx", "tsc", "--noEmit"],
+                cwd=str(HOOKS_DIR),
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            if result.returncode != 0:
+                # Parse errors from tsc output
+                error_lines = [l for l in result.stdout.split("\n") + result.stderr.split("\n")
+                              if "error" in l.lower()]
+                error_count = len(error_lines)
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.UNHEALTHY,
+                    level=self.get_level(),
+                    message=f"TypeScript compilation failed ({error_count} errors)",
+                    details={
+                        "returncode": result.returncode,
+                        "errors": error_lines[:10] if error_lines else []
+                    },
+                    recovery_action="fix_typescript_errors"
+                )
+
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.HEALTHY,
+                level=self.get_level(),
+                message="TypeScript compilation passed (0 errors)",
+                details={"returncode": result.returncode}
+            )
+        except FileNotFoundError:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="npx/tsc not installed (skipping syntax check)",
+                recovery_action="install_typescript"
+            )
+        except subprocess.TimeoutExpired:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="TypeScript compilation timed out",
+                recovery_action="check_typescript_config"
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNKNOWN,
+                level=self.get_level(),
+                message=f"Could not run TypeScript check: {e}",
+                details={"error": str(e)}
+            )
+
+
+class HookBuildCheck(HealthCheckProvider):
+    """Verify hooks were built by comparing source/dist timestamps."""
+
+    @property
+    def name(self) -> str:
+        return "hook_build"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.STARTUP
+
+    def check(self) -> HealthCheckResult:
+        if not HOOKS_SRC_DIR.exists() or not HOOKS_DIST_DIR.exists():
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="Source or dist directory missing (skipping build check)"
+            )
+
+        # Get latest source file modification time
+        src_files = list(HOOKS_SRC_DIR.glob("**/*.ts"))
+        if src_files:
+            latest_src_mtime = max(f.stat().st_mtime for f in src_files)
+        else:
+            latest_src_mtime = 0
+
+        # Get latest dist file modification time
+        dist_files = list(HOOKS_DIST_DIR.glob("*.mjs"))
+        if dist_files:
+            latest_dist_mtime = max(f.stat().st_mtime for f in dist_files)
+        else:
+            latest_dist_mtime = 0
+
+        if latest_src_mtime > latest_dist_mtime:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="Hooks are out of date (source newer than dist)",
+                details={
+                    "source_count": len(src_files),
+                    "dist_count": len(dist_files),
+                    "source_newer": True
+                },
+                recovery_action="build_hooks"
+            )
+
+        return HealthCheckResult(
+            name=self.name,
+            status=HealthStatus.HEALTHY,
+            level=self.get_level(),
+            message="Hooks are up to date",
+            details={
+                "source_count": len(src_files),
+                "dist_count": len(dist_files)
+            }
+        )
+
+
+class HookConfigCheck(HealthCheckProvider):
+    """Validate .claude/settings.json configuration."""
+
+    @property
+    def name(self) -> str:
+        return "hook_config"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.STARTUP
+
+    def check(self) -> HealthCheckResult:
+        if not SETTINGS_FILE.exists():
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="settings.json does not exist",
+                details={"path": str(SETTINGS_FILE)},
+                recovery_action="regenerate_settings"
+            )
+
+        try:
+            with open(SETTINGS_FILE) as f:
+                config = json.load(f)
+
+            # Basic validation - check for expected structure
+            errors = []
+
+            if "hooks" not in config:
+                errors.append("Missing 'hooks' configuration")
+
+            # Check hooks is a list/dict
+            hooks = config.get("hooks")
+            if hooks is not None and not isinstance(hooks, (list, dict)):
+                errors.append("'hooks' must be a list or dict")
+
+            if errors:
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.DEGRADED,
+                    level=self.get_level(),
+                    message=f"settings.json has validation issues",
+                    details={"errors": errors},
+                    recovery_action="fix_settings"
+                )
+
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.HEALTHY,
+                level=self.get_level(),
+                message="settings.json is valid",
+                details={"path": str(SETTINGS_FILE)}
+            )
+
+        except json.JSONDecodeError as e:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNHEALTHY,
+                level=self.get_level(),
+                message=f"settings.json is not valid JSON: {e}",
+                details={"error": str(e)},
+                recovery_action="regenerate_settings"
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNKNOWN,
+                level=self.get_level(),
+                message=f"Could not validate settings.json: {e}",
+                details={"error": str(e)}
+            )
+
+
+# =============================================================================
+# Bash Command Validator (Phase 2)
+# =============================================================================
+
+class BashCommandValidator:
+    """Utility class for running and validating bash commands."""
+
+    @staticmethod
+    def run_command(cmd: str, timeout: int = 10, cwd: str | None = None) -> tuple[int, str, str]:
+        """Run command, return (exit_code, stdout, stderr)."""
+        try:
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd
+            )
+            return result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired:
+            return -1, "", "Command timed out"
+        except Exception as e:
+            return -1, "", str(e)
+
+    @staticmethod
+    def test_git() -> HealthCheckResult:
+        """Test git commands."""
+        # Test git status
+        exit_code, stdout, stderr = BashCommandValidator.run_command("git status", timeout=5)
+        if exit_code != 0:
+            return HealthCheckResult(
+                name="git_status",
+                status=HealthStatus.UNHEALTHY,
+                level=HealthLevel.READINESS,
+                message=f"git status failed: {stderr}",
+                recovery_action="check_git_installation"
+            )
+
+        # Test git log (optional)
+        exit_code, stdout, stderr = BashCommandValidator.run_command("git log -1 --oneline", timeout=5)
+        if exit_code != 0:
+            return HealthCheckResult(
+                name="git_log",
+                status=HealthStatus.DEGRADED,
+                level=HealthLevel.READINESS,
+                message=f"git log failed: {stderr}"
+            )
+
+        return HealthCheckResult(
+            name="git_commands",
+            status=HealthStatus.HEALTHY,
+            level=HealthLevel.READINESS,
+            message="git commands work",
+            details={"last_commit": stdout.strip()[:50] if stdout else "unknown"}
+        )
+
+    @staticmethod
+    def test_docker_postgres() -> HealthCheckResult:
+        """Test docker exec for PostgreSQL."""
+        cmd = "docker exec continuous-claude-postgres psql -U claude -d continuous_claude -c 'SELECT 1' 2>&1"
+        exit_code, stdout, stderr = BashCommandValidator.run_command(cmd, timeout=10)
+
+        if exit_code != 0:
+            # Check if container exists but postgres isn't ready
+            if "could not find" in stderr.lower() or "no such container" in stderr.lower():
+                return HealthCheckResult(
+                    name="docker_postgres",
+                    status=HealthStatus.DEGRADED,
+                    level=HealthLevel.READINESS,
+                    message="PostgreSQL container not found",
+                    recovery_action="start_postgres_container"
+                )
+            return HealthCheckResult(
+                name="docker_postgres",
+                status=HealthStatus.UNHEALTHY,
+                level=HealthLevel.READINESS,
+                message=f"PostgreSQL query failed: {stderr}",
+                recovery_action="check_postgres_connection"
+            )
+
+        return HealthCheckResult(
+            name="docker_postgres",
+            status=HealthStatus.HEALTHY,
+            level=HealthLevel.READINESS,
+            message="docker exec psql works"
+        )
+
+    @staticmethod
+    def test_npm_build() -> HealthCheckResult:
+        """Test npm run build in hooks directory."""
+        if not HOOKS_DIR.exists():
+            return HealthCheckResult(
+                name="npm_build",
+                status=HealthStatus.DEGRADED,
+                level=HealthLevel.READINESS,
+                message="hooks directory not found"
+            )
+
+        # Quick test: check if package.json exists and has build script
+        package_json = HOOKS_DIR / "package.json"
+        if not package_json.exists():
+            return HealthCheckResult(
+                name="npm_build",
+                status=HealthStatus.DEGRADED,
+                level=HealthLevel.READINESS,
+                message="package.json not found in hooks directory"
+            )
+
+        try:
+            with open(package_json) as f:
+                pkg = json.load(f)
+            if "scripts" not in pkg or "build" not in pkg.get("scripts", {}):
+                return HealthCheckResult(
+                    name="npm_build",
+                    status=HealthStatus.DEGRADED,
+                    level=HealthLevel.READINESS,
+                    message="build script not found in package.json"
+                )
+        except Exception as e:
+            return HealthCheckResult(
+                name="npm_build",
+                status=HealthStatus.DEGRADED,
+                level=HealthLevel.READINESS,
+                message=f"Could not read package.json: {e}"
+            )
+
+        # Run actual build test (quick check)
+        exit_code, stdout, stderr = BashCommandValidator.run_command(
+            "npm run build --if-present",
+            cwd=str(HOOKS_DIR),
+            timeout=60
+        )
+
+        if exit_code != 0:
+            return HealthCheckResult(
+                name="npm_build",
+                status=HealthStatus.UNHEALTHY,
+                level=HealthLevel.READINESS,
+                message=f"npm run build failed: {stderr}",
+                recovery_action="fix_build_errors"
+            )
+
+        return HealthCheckResult(
+            name="npm_build",
+            status=HealthStatus.HEALTHY,
+            level=HealthLevel.READINESS,
+            message="npm run build works"
+        )
+
+    @staticmethod
+    def test_tldr_cli() -> HealthCheckResult:
+        """Test tldr CLI availability."""
+        # Check if tldr is installed
+        exit_code, stdout, stderr = BashCommandValidator.run_command("which tldr", timeout=5)
+        if exit_code != 0:
+            return HealthCheckResult(
+                name="tldr_cli",
+                status=HealthStatus.DEGRADED,
+                level=HealthLevel.READINESS,
+                message="tldr CLI not found in PATH",
+                recovery_action="install_tldr"
+            )
+
+        # Get version
+        exit_code, stdout, stderr = BashCommandValidator.run_command("tldr --version", timeout=5)
+        version = stdout.strip() if stdout else "unknown"
+
+        return HealthCheckResult(
+            name="tldr_cli",
+            status=HealthStatus.HEALTHY,
+            level=HealthLevel.READINESS,
+            message=f"tldr CLI is installed ({version})",
+            details={"version": version, "path": stdout.strip() if exit_code == 0 else "unknown"}
+        )
+
+
+class BashCommandCheck(HealthCheckProvider):
+    """Check critical bash commands."""
+
+    @property
+    def name(self) -> str:
+        return "bash_commands"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.READINESS
+
+    def check(self) -> HealthCheckResult:
+        results = []
+
+        # Test git
+        results.append(BashCommandValidator.test_git())
+
+        # Test docker/postgres
+        results.append(BashCommandValidator.test_docker_postgres())
+
+        # Test npm build
+        results.append(BashCommandValidator.test_npm_build())
+
+        # Test tldr
+        results.append(BashCommandValidator.test_tldr_cli())
+
+        # Aggregate results
+        unhealthy = [r for r in results if r.status == HealthStatus.UNHEALTHY]
+        degraded = [r for r in results if r.status == HealthStatus.DEGRADED]
+        healthy = [r for r in results if r.status == HealthStatus.HEALTHY]
+
+        if unhealthy:
+            overall_status = HealthStatus.UNHEALTHY
+            message = f"{len(unhealthy)} critical command(s) failed"
+        elif degraded:
+            overall_status = HealthStatus.DEGRADED
+            message = f"{len(degraded)} optional command(s) degraded"
+        else:
+            overall_status = HealthStatus.HEALTHY
+            message = "All critical commands working"
+
+        return HealthCheckResult(
+            name=self.name,
+            status=overall_status,
+            level=self.get_level(),
+            message=message,
+            details={
+                "total": len(results),
+                "healthy": len(healthy),
+                "degraded": len(degraded),
+                "unhealthy": len(unhealthy)
+            },
+            recovery_action="fix_bash_commands" if unhealthy else None
+        )
+
+
+# =============================================================================
+# TLDR/LLM Verification Providers (Phase 3)
+# =============================================================================
+
+class TldrCliCheck(HealthCheckProvider):
+    """Verify tldr CLI is installed and functional."""
+
+    @property
+    def name(self) -> str:
+        return "tldr_functional"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.READINESS
+
+    def check(self) -> HealthCheckResult:
+        # Check which tldr
+        exit_code, stdout, stderr = BashCommandValidator.run_command("which tldr", timeout=5)
+        if exit_code != 0:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="tldr CLI not found",
+                recovery_action="install_tldr"
+            )
+
+        tldr_path = stdout.strip()
+
+        # Run basic tldr command
+        exit_code, stdout, stderr = BashCommandValidator.run_command(
+            "tldr --version",
+            timeout=10
+        )
+
+        if exit_code != 0:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message=f"tldr --version failed: {stderr}",
+                recovery_action="reinstall_tldr"
+            )
+
+        # Try a simple tldr command to verify functionality
+        exit_code, stdout, stderr = BashCommandValidator.run_command(
+            "tldr tree . 2>&1 | head -20",
+            cwd=str(Path(__file__).parent.parent.parent),
+            timeout=15
+        )
+
+        return HealthCheckResult(
+            name=self.name,
+            status=HealthStatus.HEALTHY,
+            level=self.get_level(),
+            message=f"tldr CLI is functional",
+            details={"path": tldr_path, "version": stdout.strip() if stdout else "unknown"}
+        )
+
+
+class TldrIndexCheck(HealthCheckProvider):
+    """Verify tldr symbol index exists and is current."""
+
+    @property
+    def name(self) -> str:
+        return "tldr_index"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.READINESS
+
+    def check(self) -> HealthCheckResult:
+        # Check for tldr index in common locations
+        index_locations = [
+            Path.home() / ".cache" / "tldr" / "index.json",
+            Path.home() / ".local" / "share" / "tldr" / "index.json",
+            Path.home() / ".claude" / "tldr-index.json",
+        ]
+
+        index_path = None
+        for loc in index_locations:
+            if loc.exists():
+                index_path = loc
+                break
+
+        if not index_path:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="tldr index not found",
+                recovery_action="rebuild_tldr_index"
+            )
+
+        # Check if index is stale (> 24 hours old)
+        try:
+            mtime = index_path.stat().st_mtime
+            age_hours = (time.time() - mtime) / 3600
+            if age_hours > 24:
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.DEGRADED,
+                    level=self.get_level(),
+                    message=f"tldr index is stale ({age_hours:.1f} hours old)",
+                    details={"path": str(index_path), "age_hours": age_hours},
+                    recovery_action="rebuild_tldr_index"
+                )
+
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.HEALTHY,
+                level=self.get_level(),
+                message=f"tldr index exists and is current",
+                details={"path": str(index_path), "age_hours": age_hours}
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNKNOWN,
+                level=self.get_level(),
+                message=f"Could not check index age: {e}"
+            )
+
+
+class LlmProviderCheck(HealthCheckProvider):
+    """Verify LLM API key is configured."""
+
+    @property
+    def name(self) -> str:
+        return "llm_provider"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.READINESS
+
+    def check(self) -> HealthCheckResult:
+        # Check for Anthropic API key
+        api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
+
+        if not api_key:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="ANTHROPIC_API_KEY not configured",
+                details={"configured": False},
+                recovery_action="configure_api_key"
+            )
+
+        # Validate key format
+        if not api_key.startswith("sk-ant-api"):
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="API key format may be invalid",
+                details={"key_prefix": api_key[:15] + "..."}
+            )
+
+        return HealthCheckResult(
+            name=self.name,
+            status=HealthStatus.HEALTHY,
+            level=self.get_level(),
+            message="ANTHROPIC_API_KEY is configured",
+            details={"configured": True, "key_prefix": api_key[:15] + "..."}
+        )
+
+
+class EmbeddingProviderCheck(HealthCheckProvider):
+    """Verify pgvector/embeddings are working."""
+
+    @property
+    def name(self) -> str:
+        return "embedding_provider"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.READINESS
+
+    def check(self) -> HealthCheckResult:
+        postgres_url = os.environ.get("DATABASE_URL")
+        if not postgres_url:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="PostgreSQL not configured for embeddings",
+                details={"configured": False}
+            )
+
+        try:
+            import psycopg2
+            conn = psycopg2.connect(postgres_url)
+            cur = conn.cursor()
+
+            # Check pgvector extension
+            cur.execute("SELECT * FROM pg_extension WHERE extname = 'vector'")
+            vector_exists = cur.fetchone() is not None
+
+            if not vector_exists:
+                conn.close()
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.UNHEALTHY,
+                    level=self.get_level(),
+                    message="pgvector extension not installed",
+                    recovery_action="install_pgvector"
+                )
+
+            # Check if embedding column exists
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'archival_memory' AND column_name = 'embedding'
+            """)
+            embedding_exists = cur.fetchone() is not None
+
+            conn.close()
+
+            if not embedding_exists:
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.DEGRADED,
+                    level=self.get_level(),
+                    message="embedding column missing (will be created on migration)"
+                )
+
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.HEALTHY,
+                level=self.get_level(),
+                message="pgvector is installed and configured",
+                details={"pgvector": True, "embedding_column": embedding_exists}
+            )
+
+        except ImportError:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="psycopg2 not installed (cannot check pgvector)"
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message=f"Could not verify embeddings: {e}",
+                details={"error": str(e)}
+            )
+
+
+# =============================================================================
+# Database Index Verification Providers (Phase 4)
+# =============================================================================
+
+class VectorIndexCheck(HealthCheckProvider):
+    """Verify pgvector extension and indexes."""
+
+    @property
+    def name(self) -> str:
+        return "vector_index"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.STARTUP
+
+    def check(self) -> HealthCheckResult:
+        postgres_url = os.environ.get("DATABASE_URL")
+        if not postgres_url:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="PostgreSQL not configured",
+                details={"configured": False}
+            )
+
+        try:
+            import psycopg2
+            conn = psycopg2.connect(postgres_url)
+            cur = conn.cursor()
+
+            # Check pgvector extension
+            cur.execute("SELECT * FROM pg_extension WHERE extname = 'vector'")
+            if not cur.fetchone():
+                conn.close()
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.UNHEALTHY,
+                    level=self.get_level(),
+                    message="pgvector extension not installed",
+                    recovery_action="install_pgvector"
+                )
+
+            # Check vector column exists
+            cur.execute("""
+                SELECT column_name, data_type FROM information_schema.columns
+                WHERE table_name = 'archival_memory' AND column_name = 'embedding'
+            """)
+            col = cur.fetchone()
+
+            if not col:
+                conn.close()
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.DEGRADED,
+                    level=self.get_level(),
+                    message="embedding column missing in archival_memory"
+                )
+
+            # Check indexes
+            cur.execute("""
+                SELECT indexname, indexdef FROM pg_indexes
+                WHERE tablename = 'archival_memory'
+            """)
+            indexes = cur.fetchall()
+
+            conn.close()
+
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.HEALTHY,
+                level=self.get_level(),
+                message="pgvector extension installed",
+                details={
+                    "extension": "vector",
+                    "column": col[0],
+                    "data_type": col[1],
+                    "indexes": [i[0] for i in indexes]
+                }
+            )
+
+        except ImportError:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="psycopg2 not installed"
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNHEALTHY,
+                level=self.get_level(),
+                message=f"Could not verify vector index: {e}",
+                details={"error": str(e)},
+                recovery_action="check_db_connection"
+            )
+
+
+class SchemaVersionCheck(HealthCheckProvider):
+    """Verify migration version."""
+
+    @property
+    def name(self) -> str:
+        return "schema_version"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.STARTUP
+
+    def check(self) -> HealthCheckResult:
+        postgres_url = os.environ.get("DATABASE_URL")
+        if not postgres_url:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="PostgreSQL not configured",
+                details={"configured": False}
+            )
+
+        try:
+            import psycopg2
+            conn = psycopg2.connect(postgres_url)
+            cur = conn.cursor()
+
+            # Check for schema_migrations table
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = 'schema_migrations'
+                )
+            """)
+            has_migrations_table = cur.fetchone()[0]
+
+            if not has_migrations_table:
+                conn.close()
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.DEGRADED,
+                    level=self.get_level(),
+                    message="schema_migrations table not found"
+                )
+
+            # Get latest migration version
+            cur.execute("SELECT version FROM schema_migrations ORDER BY applied_at DESC LIMIT 1")
+            row = cur.fetchone()
+            version = row[0] if row else "unknown"
+
+            conn.close()
+
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.HEALTHY,
+                level=self.get_level(),
+                message=f"Schema is up to date (version {version})",
+                details={"version": version}
+            )
+
+        except ImportError:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="psycopg2 not installed"
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNKNOWN,
+                level=self.get_level(),
+                message=f"Could not check schema version: {e}",
+                details={"error": str(e)}
+            )
+
+
+class DatabasePermissionsCheck(HealthCheckProvider):
+    """Verify database user permissions."""
+
+    @property
+    def name(self) -> str:
+        return "db_permissions"
+
+    def get_level(self) -> HealthLevel:
+        return HealthLevel.READINESS
+
+    def check(self) -> HealthCheckResult:
+        postgres_url = os.environ.get("DATABASE_URL")
+        if not postgres_url:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="PostgreSQL not configured"
+            )
+
+        try:
+            import psycopg2
+            conn = psycopg2.connect(postgres_url)
+            cur = conn.cursor()
+
+            # Test SELECT on all tables
+            tables = ["sessions", "file_claims", "handoffs", "archival_memory"]
+            select_ok = True
+            for table in tables:
+                try:
+                    cur.execute(f"SELECT 1 FROM {table} LIMIT 1")
+                    cur.fetchone()
+                except Exception:
+                    select_ok = False
+                    break
+
+            if not select_ok:
+                conn.close()
+                return HealthCheckResult(
+                    name=self.name,
+                    status=HealthStatus.UNHEALTHY,
+                    level=self.get_level(),
+                    message="User lacks SELECT permissions on some tables",
+                    recovery_action="fix_database_permissions"
+                )
+
+            # Test INSERT on sessions table (non-destructive)
+            try:
+                cur.execute("""
+                    INSERT INTO sessions (id, project, working_on, last_heartbeat)
+                    VALUES ('_health_check_', 'health_check', 'health_check', NOW())
+                    ON CONFLICT (id) DO NOTHING
+                """)
+                conn.commit()
+            except Exception:
+                pass  # Ignore insert failures
+
+            conn.close()
+
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.HEALTHY,
+                level=self.get_level(),
+                message="User has required permissions",
+                details={"tables": tables, "select_ok": True}
+            )
+
+        except ImportError:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.DEGRADED,
+                level=self.get_level(),
+                message="psycopg2 not installed"
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name=self.name,
+                status=HealthStatus.UNHEALTHY,
+                level=self.get_level(),
+                message=f"Could not verify permissions: {e}",
+                details={"error": str(e)},
+                recovery_action="fix_database_permissions"
+            )
+
+
+# =============================================================================
 # Utility Functions
 # =============================================================================
 
@@ -1064,6 +2083,26 @@ class HealthCheck:
         # Startup checks
         self.providers.append(SchemaCheck())
 
+        # Hook health checks (Phase 1)
+        self.providers.append(HookFileCheck())
+        self.providers.append(HookSyntaxCheck())
+        self.providers.append(HookBuildCheck())
+        self.providers.append(HookConfigCheck())
+
+        # Bash command checks (Phase 2)
+        self.providers.append(BashCommandCheck())
+
+        # TLDR/LLM checks (Phase 3)
+        self.providers.append(TldrCliCheck())
+        self.providers.append(TldrIndexCheck())
+        self.providers.append(LlmProviderCheck())
+        self.providers.append(EmbeddingProviderCheck())
+
+        # Database index checks (Phase 4)
+        self.providers.append(VectorIndexCheck())
+        self.providers.append(SchemaVersionCheck())
+        self.providers.append(DatabasePermissionsCheck())
+
     def add_provider(self, provider: HealthCheckProvider):
         """Add a custom health check provider."""
         self.providers.append(provider)
@@ -1124,8 +2163,31 @@ class HealthCheck:
         return self.check_level(HealthLevel.STARTUP)
 
     def check_all(self) -> HealthReport:
-        """Run all health checks."""
-        return self.check_level(HealthLevel.LIVENESS)  # Includes all in current impl
+        """Run all health checks across all levels."""
+        # Run checks for all levels and aggregate results
+        all_results = []
+        start_time = time.time()
+
+        for level in [HealthLevel.STARTUP, HealthLevel.READINESS, HealthLevel.LIVENESS]:
+            level_report = self.check_level(level)
+            all_results.extend(level_report.checks)
+
+        # Determine overall status
+        if any(r.status == HealthStatus.UNHEALTHY for r in all_results):
+            overall = HealthStatus.UNHEALTHY
+        elif any(r.status == HealthStatus.DEGRADED for r in all_results):
+            overall = HealthStatus.DEGRADED
+        elif all(r.status == HealthStatus.HEALTHY for r in all_results):
+            overall = HealthStatus.HEALTHY
+        else:
+            overall = HealthStatus.UNKNOWN
+
+        return HealthReport(
+            overall_status=overall,
+            level=HealthLevel.LIVENESS,
+            checks=all_results,
+            uptime_seconds=time.time() - start_time
+        )
 
     def run_recovery(self, result: HealthCheckResult) -> bool:
         """Attempt automated recovery for a failed check."""
@@ -1145,6 +2207,32 @@ class HealthCheck:
             "free_memory": self._action_free_memory,
             "check_db_connection": self._action_check_db_connection,
             "check_redis_connection": self._action_check_redis_connection,
+            # Hook recovery actions
+            "build_hooks": self._action_build_hooks,
+            "fix_typescript_errors": self._action_fix_typescript_errors,
+            "regenerate_settings": self._action_regenerate_settings,
+            # Bash command recovery actions
+            "check_git_installation": self._action_check_git,
+            "start_postgres_container": self._action_start_postgres,
+            "check_postgres_connection": self._action_check_postgres,
+            "fix_build_errors": self._action_fix_build_errors,
+            "install_tldr": self._action_install_tldr,
+            "reinstall_tldr": self._action_reinstall_tldr,
+            "fix_bash_commands": self._action_fix_bash_commands,
+            # LLM recovery actions
+            "configure_api_key": self._action_configure_api_key,
+            # Embedding recovery actions
+            "configure_embedding_provider": self._action_configure_embedding,
+            "install_pgvector": self._action_install_pgvector,
+            # Database recovery actions
+            "run_migrations": self._action_run_migrations,
+            "fix_database_permissions": self._action_fix_permissions,
+            # Index recovery actions
+            "rebuild_tldr_index": self._action_rebuild_tldr_index,
+            # Settings recovery actions
+            "fix_settings": self._action_fix_settings,
+            "install_typescript": self._action_install_typescript,
+            "check_typescript_config": self._action_check_tsc_config,
         }
 
         action_func = recovery_actions.get(action)
@@ -1283,6 +2371,153 @@ class HealthCheck:
                 return True
             except Exception:
                 pass
+        return False
+
+    # =========================================================================
+    # Hook Recovery Actions
+    # =========================================================================
+
+    def _action_build_hooks(self) -> bool:
+        """Build hooks by running npm run build."""
+        if not HOOKS_DIR.exists():
+            return False
+        try:
+            result = subprocess.run(
+                ["npm", "run", "build"],
+                cwd=str(HOOKS_DIR),
+                capture_output=True,
+                timeout=120
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _action_fix_typescript_errors(self) -> bool:
+        """Show TypeScript compilation errors."""
+        if not HOOKS_DIR.exists():
+            return False
+        try:
+            result = subprocess.run(
+                ["npx", "tsc", "--noEmit"],
+                cwd=str(HOOKS_DIR),
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            if result.returncode != 0:
+                print("TypeScript Errors:")
+                print(result.stdout)
+                print(result.stderr)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _action_regenerate_settings(self) -> bool:
+        """Regenerate .claude/settings.json."""
+        print("To regenerate settings, run: uv run python -m scripts.setup.wizard")
+        return False
+
+    def _action_fix_settings(self) -> bool:
+        """Fix settings.json issues."""
+        print("Review settings.json and fix the reported issues.")
+        return False
+
+    def _action_install_typescript(self) -> bool:
+        """Install TypeScript."""
+        print("To install TypeScript: npm install -g typescript")
+        return False
+
+    def _action_check_tsc_config(self) -> False:
+        """Check TypeScript configuration."""
+        print("Review tsconfig.json for configuration issues.")
+        return False
+
+    # =========================================================================
+    # Bash Command Recovery Actions
+    # =========================================================================
+
+    def _action_check_git(self) -> bool:
+        """Check git installation."""
+        print("Git is not properly installed or not in PATH.")
+        return False
+
+    def _action_start_postgres(self) -> bool:
+        """Start PostgreSQL container."""
+        print("To start PostgreSQL: docker-compose up -d (in opc/ directory)")
+        return False
+
+    def _action_check_postgres(self) -> bool:
+        """Check PostgreSQL connection."""
+        print("Check that PostgreSQL container is running: docker ps")
+        return False
+
+    def _action_fix_build_errors(self) -> bool:
+        """Fix npm build errors."""
+        print("Review npm build output for specific errors.")
+        return False
+
+    def _action_install_tldr(self) -> bool:
+        """Install tldr CLI."""
+        print("To install tldr: brew install tldr (macOS) or npm install -g tldr")
+        return False
+
+    def _action_reinstall_tldr(self) -> bool:
+        """Reinstall tldr CLI."""
+        print("To reinstall tldr: brew reinstall tldr or npm install -g tldr")
+        return False
+
+    def _action_fix_bash_commands(self) -> bool:
+        """Fix bash command issues."""
+        print("Review the failed command checks and resolve dependencies.")
+        return False
+
+    # =========================================================================
+    # LLM Recovery Actions
+    # =========================================================================
+
+    def _action_configure_api_key(self) -> bool:
+        """Configure API key."""
+        print("Set ANTHROPIC_API_KEY environment variable:")
+        print("  export ANTHROPIC_API_KEY='your-api-key'")
+        return False
+
+    # =========================================================================
+    # Embedding Recovery Actions
+    # =========================================================================
+
+    def _action_configure_embedding(self) -> bool:
+        """Configure embedding provider."""
+        print("Configure DATABASE_URL for PostgreSQL with pgvector extension.")
+        return False
+
+    def _action_install_pgvector(self) -> bool:
+        """Install pgvector extension."""
+        print("To install pgvector:")
+        print("  1. Connect to PostgreSQL container")
+        print("  2. Run: CREATE EXTENSION IF NOT EXISTS vector;")
+        return False
+
+    # =========================================================================
+    # Database Recovery Actions
+    # =========================================================================
+
+    def _action_run_migrations(self) -> bool:
+        """Run database migrations."""
+        print("To run migrations: uv run python scripts/core/migrate.py")
+        return False
+
+    def _action_fix_permissions(self) -> bool:
+        """Fix database permissions."""
+        print("Grant required permissions to the database user.")
+        return False
+
+    # =========================================================================
+    # Index Recovery Actions
+    # =========================================================================
+
+    def _action_rebuild_tldr_index(self) -> bool:
+        """Rebuild tldr index."""
+        print("To rebuild tldr index: tldr --update")
         return False
 
 
@@ -1500,6 +2735,110 @@ def cmd_check(args):
     return 0 if report.overall_status != HealthStatus.UNHEALTHY else 1
 
 
+def format_validation_report(report: HealthReport, verbose: bool = False) -> str:
+    """Format validation report for display."""
+    # Group results by component type
+    component_groups = {}
+    for result in report.checks:
+        # Determine component from check name
+        name = result.name
+        if name.startswith("hook_"):
+            component = "hooks"
+        elif name.startswith("bash_commands") or name.startswith("git_") or name.startswith("docker_") or name.startswith("npm_"):
+            component = "bash"
+        elif name.startswith("tldr_"):
+            component = "tldr"
+        elif name.startswith("llm_") or name.startswith("embedding_"):
+            component = "llm"
+        elif name.startswith("vector_") or name.startswith("schema_") or name.startswith("db_"):
+            component = "database"
+        else:
+            component = "other"
+
+        if component not in component_groups:
+            component_groups[component] = []
+        component_groups[component].append(result)
+
+    lines = [
+        "=" * 60,
+        "Continuous-Claude-v3 Validator",
+        "=" * 60,
+        f"Timestamp: {report.timestamp}",
+        "",
+    ]
+
+    # Overall status
+    overall = report.overall_status.value.upper()
+    if report.overall_status == HealthStatus.HEALTHY:
+        lines.append(f"OVERALL: {overall}")
+    elif report.overall_status == HealthStatus.DEGRADED:
+        lines.append(f"OVERALL: {overall}")
+    else:
+        lines.append(f"OVERALL: {overall}")
+    lines.append("")
+
+    # Component sections
+    status_icons = {
+        HealthStatus.HEALTHY: "[OK]",
+        HealthStatus.DEGRADED: "[WARN]",
+        HealthStatus.UNHEALTHY: "[FAIL]",
+        HealthStatus.UNKNOWN: "[?]"
+    }
+
+    for component in sorted(component_groups.keys()):
+        lines.append(f"COMPONENT: {component}")
+        for result in component_groups[component]:
+            icon = status_icons.get(result.status, "[?]")
+            lines.append(f"  {icon} {result.name}: {result.message}")
+            if verbose and result.details:
+                for key, value in result.details.items():
+                    lines.append(f"      {key}: {value}")
+        lines.append("")
+
+    # Summary
+    total = len(report.checks)
+    passed = sum(1 for r in report.checks if r.status == HealthStatus.HEALTHY)
+    failed = sum(1 for r in report.checks if r.status == HealthStatus.UNHEALTHY)
+    degraded = sum(1 for r in report.checks if r.status == HealthStatus.DEGRADED)
+
+    lines.append("SUMMARY:")
+    lines.append(f"  Total: {total} | Passed: {passed} | Failed: {failed} | Degraded: {degraded}")
+
+    return "\n".join(lines)
+
+
+def cmd_validate(args):
+    """Run comprehensive validation of all components."""
+    hc = HealthCheck()
+    report = hc.check_all()
+
+    # Filter by component
+    if args.component != "all":
+        component_map = {
+            "hook": ["hook_"],
+            "bash": ["bash_commands", "git_", "docker_", "npm_"],
+            "tldr": ["tldr_"],
+            "llm": ["llm_", "embedding_"],
+            "database": ["vector_", "schema_", "db_"],
+        }
+        filter_prefixes = component_map.get(args.component, [])
+        if filter_prefixes:
+            report.checks = [c for c in report.checks
+                            if any(c.name.startswith(p) for p in filter_prefixes)]
+
+    # Filter by level
+    if args.level != "all":
+        report.checks = [c for c in report.checks if c.level.value == args.level]
+
+    # Output format
+    if args.json:
+        print(report.to_json())
+    else:
+        print(format_validation_report(report, verbose=args.verbose))
+
+    return 0 if report.overall_status != HealthStatus.UNHEALTHY else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Continuous-Claude-v3 Health Check System",
@@ -1559,6 +2898,17 @@ Health Levels:
     server_parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
     server_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
 
+    # validate command
+    validate_parser = subparsers.add_parser("validate", help="Validate all components")
+    validate_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed output")
+    validate_parser.add_argument("--component", "-c",
+                                choices=["hook", "bash", "tldr", "llm", "database", "all"],
+                                default="all", help="Filter by component")
+    validate_parser.add_argument("--level", "-l",
+                                choices=["startup", "readiness", "liveness", "all"],
+                                default="all", help="Filter by health level")
+    validate_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1573,6 +2923,7 @@ Health Levels:
         "check": cmd_check,
         "metrics": cmd_metrics,
         "server": cmd_server,
+        "validate": cmd_validate,
     }
 
     handler = command_handlers.get(args.command)

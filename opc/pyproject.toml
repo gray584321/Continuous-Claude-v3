@@ -147,6 +147,12 @@ markers = [
     "variable: tests for variable name extraction",
     "slow: performance and stress tests",
     "api: API contract tests",
+    # Integration test markers
+    "database: database-related integration tests",
+    "wizard: wizard and migration tests",
+    "validator: health check and validation tests",
+    "tldr: TLDR indexing and search tests",
+    "integration: full integration tests",
 ]
 
 [dependency-groups]

@@ -21,12 +21,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Add tldr-code to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "packages" / "tldr-code"))
+# Add scripts directory to path for imports
+_SCRIPT_DIR = Path(__file__).parent.parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 # Try to import TLDR API, but gracefully handle missing deps
 try:
-    from tldr.api import (
+    from scripts.tldr.tldr_api import (
         scan_project_files,
         extract_file,
         build_function_index,
@@ -87,21 +89,16 @@ def build_index(search_path: str) -> dict:
 
 
 def build_callers_index(search_path: str) -> dict:
-    """Build reverse index mapping functions to their file locations."""
+    """Build reverse index mapping functions to their callers."""
     callers = {}
 
-    try:
-        # Build function index (maps function names to file paths)
-        index = build_function_index(search_path, language="python")
+    # Build function index
+    index = build_function_index(search_path, language="python")
 
-        # The index maps (module, func) or "module.func" -> file path
-        for key, file_path in index.items():
-            if isinstance(key, str) and "." in key:
-                func_name = key.split(".")[-1]
-                if func_name not in callers:
-                    callers[func_name] = {"file": file_path}
-    except Exception as e:
-        print(f"Warning building function index: {e}", file=sys.stderr)
+    # The index maps function name -> {file, line}
+    for func_name, info in index.items():
+        if func_name not in callers:
+            callers[func_name] = {"file": info["file"]}
 
     return callers
 
