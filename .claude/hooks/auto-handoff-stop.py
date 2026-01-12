@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.9"
+# dependencies = []
+# ///
+"""Stop hook: Block when context is too high and suggest handoff."""
 import json, sys, glob, os, tempfile
 
 data = json.load(sys.stdin)
