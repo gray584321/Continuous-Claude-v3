@@ -177,6 +177,24 @@ CREATE INDEX idx_preferences_user ON user_preferences(user_id);
 CREATE INDEX idx_preferences_proposition ON user_preferences(user_id, proposition);
 
 -- ============================================================================
+-- FINDINGS (research/tracking findings)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS findings (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    finding TEXT NOT NULL,
+    relevant_to TEXT[],
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_findings_session ON findings(session_id);
+CREATE INDEX idx_findings_topic ON findings(topic);
+CREATE INDEX idx_findings_created ON findings(created_at DESC);
+CREATE INDEX idx_findings_relevant ON findings USING GIN(relevant_to);
+
+-- ============================================================================
 -- HELPER FUNCTIONS
 -- ============================================================================
 

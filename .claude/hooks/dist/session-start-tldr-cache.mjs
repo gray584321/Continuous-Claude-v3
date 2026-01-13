@@ -343,7 +343,10 @@ async function main() {
   });
   const cacheInfo = cache.exists ? `${available.join(", ")}` : "building...";
   const message = `\u{1F4CA} TLDR cache${ageStr}${freshness}${warmStatus}: ${cacheInfo}${semanticWarning}`;
-  console.log(message);
+  console.log(JSON.stringify({
+    result: "continue",
+    message
+  }));
 }
 main().catch(() => {
   console.log("{}");

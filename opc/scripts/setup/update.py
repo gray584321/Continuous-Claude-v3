@@ -1253,23 +1253,28 @@ def run_update(
     if run_migrations:
         console.print("\n[bold]Step 1.5/9: Running database migrations...[/bold]")
         try:
+            import asyncio
             from scripts.migrations.migration_manager import MigrationManager
 
-            manager = MigrationManager()
-            pending = manager.get_pending_migrations()
+            async def run_migrations_async():
+                manager = MigrationManager()
+                pending = await manager.get_pending_migrations()
 
-            if pending:
-                console.print(f"  [bold]{len(pending)}[/bold] pending migration(s)...")
-                import asyncio
+                if pending:
+                    console.print(f"  [bold]{len(pending)}[/bold] pending migration(s)...")
+                    mig_result = await manager.apply_all()
+                    return mig_result.to_dict() if hasattr(mig_result, 'to_dict') else mig_result
+                else:
+                    return {"applied": [], "skipped": [], "failed": [], "error": None}
 
-                mig_result = asyncio.run(manager.apply_all())
-                if mig_result["applied"]:
-                    console.print(f"  [green]Applied:[/green] {', '.join(mig_result['applied'])}")
-                if mig_result["skipped"]:
-                    console.print(f"  [yellow]Skipped:[/yellow] {', '.join(mig_result['skipped'])}")
-                if mig_result["failed"]:
-                    console.print(f"  [yellow]WARN[/yellow] Migration failed: {mig_result['error']}")
-                    summary.errors.append(f"Migration failed: {mig_result['error']}")
+            mig_dict = asyncio.run(run_migrations_async())
+            if mig_dict.get("applied"):
+                console.print(f"  [green]Applied:[/green] {', '.join(mig_dict['applied'])}")
+            if mig_dict.get("skipped"):
+                console.print(f"  [yellow]Skipped:[/yellow] {', '.join(mig_dict['skipped'])}")
+            if mig_dict.get("failed"):
+                console.print(f"  [yellow]WARN[/yellow] Migration failed: {mig_dict.get('error', 'unknown')}")
+                summary.errors.append(f"Migration failed: {mig_dict.get('error', 'unknown')}")
             else:
                 console.print("  [dim]All migrations up to date[/dim]")
         except Exception as e:

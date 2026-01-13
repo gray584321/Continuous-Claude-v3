@@ -272,5 +272,6 @@ Use /recall "${intent}" for full content. Disclose if helpful.`;
     }));
   }
 }
-main().catch(() => {
+main().catch((err) => {
+  console.error(`[memory-awareness] Error: ${err}`);
 });

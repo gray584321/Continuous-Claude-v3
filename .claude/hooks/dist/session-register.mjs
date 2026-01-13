@@ -91,17 +91,6 @@ pg_url = os.environ.get('OPC_POSTGRES_URL', 'postgresql://claude:claude_dev@loca
 async def main():
     conn = await asyncpg.connect(pg_url)
     try:
-        # Create table if not exists
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                project TEXT NOT NULL,
-                working_on TEXT,
-                started_at TIMESTAMP DEFAULT NOW(),
-                last_heartbeat TIMESTAMP DEFAULT NOW()
-            )
-        ''')
-
         # Upsert session
         await conn.execute('''
             INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat)
@@ -212,6 +201,13 @@ function main() {
   const projectName = project.split("/").pop() || "unknown";
   process.env.COORDINATION_SESSION_ID = sessionId;
   const registerResult = registerSession(sessionId, project, "");
+  if (!registerResult.success) {
+    console.log(JSON.stringify({
+      result: "continue",
+      message: `Warning: Failed to register session in database: ${registerResult.error || "Unknown error"}`
+    }));
+    return;
+  }
   const sessionsResult = getActiveSessions(project);
   const otherSessions = sessionsResult.sessions.filter((s) => s.id !== sessionId);
   let awarenessMessage = `

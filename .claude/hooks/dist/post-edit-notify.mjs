@@ -287,7 +287,8 @@ async function main() {
       console.log(JSON.stringify(output));
       return;
     }
-  } catch {
+  } catch (err) {
+    console.error(`[post-edit-notify] Error: ${err}`);
   }
   console.log("{}");
 }

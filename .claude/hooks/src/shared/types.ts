@@ -46,6 +46,15 @@ export interface StopInput {
   stop_hook_active?: boolean;
 }
 
+export interface SessionStartInput {
+  session_id: string;
+  project?: string;
+  working_on?: string;
+  parent_session_id?: string;
+  agent_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // =============================================================================
 // Hook Output Types (Claude Code v1.0.21+ format)
 // =============================================================================

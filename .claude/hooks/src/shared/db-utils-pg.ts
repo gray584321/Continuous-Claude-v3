@@ -400,17 +400,6 @@ pg_url = os.environ.get('OPC_POSTGRES_URL', 'postgresql://claude:claude_dev@loca
 async def main():
     conn = await asyncpg.connect(pg_url)
     try:
-        # Create table if not exists
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                project TEXT NOT NULL,
-                working_on TEXT,
-                started_at TIMESTAMP DEFAULT NOW(),
-                last_heartbeat TIMESTAMP DEFAULT NOW()
-            )
-        ''')
-
         # Upsert session
         await conn.execute('''
             INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat)
@@ -542,17 +531,6 @@ pg_url = os.environ.get('OPC_POSTGRES_URL', 'postgresql://claude:claude_dev@loca
 async def main():
     conn = await asyncpg.connect(pg_url)
     try:
-        # Create table if not exists
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS file_claims (
-                file_path TEXT,
-                project TEXT,
-                session_id TEXT,
-                claimed_at TIMESTAMP DEFAULT NOW(),
-                PRIMARY KEY (file_path, project)
-            )
-        ''')
-
         row = await conn.fetchrow('''
             SELECT session_id, claimed_at FROM file_claims
             WHERE file_path = $1 AND project = $2 AND session_id != $3
@@ -725,18 +703,6 @@ pg_url = os.environ.get('OPC_POSTGRES_URL', 'postgresql://claude:claude_dev@loca
 async def main():
     conn = await asyncpg.connect(pg_url)
     try:
-        # Create table if not exists
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS findings (
-                id SERIAL PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                finding TEXT NOT NULL,
-                relevant_to TEXT[],
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-        ''')
-
         await conn.execute('''
             INSERT INTO findings (session_id, topic, finding, relevant_to)
             VALUES ($1, $2, $3, $4)

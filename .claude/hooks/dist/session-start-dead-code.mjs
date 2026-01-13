@@ -330,7 +330,10 @@ async function main() {
     dead_found: result.count
   });
   const warning = formatWarning(result);
-  console.log(warning);
+  console.log(JSON.stringify({
+    result: "continue",
+    message: warning
+  }));
 }
 main().catch(() => {
   console.log("{}");

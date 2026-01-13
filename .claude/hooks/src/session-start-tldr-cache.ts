@@ -162,7 +162,10 @@ async function main() {
   const message = `📊 TLDR cache${ageStr}${freshness}${warmStatus}: ${cacheInfo}${semanticWarning}`;
 
   // Output as system reminder (not full context injection)
-  console.log(message);
+  console.log(JSON.stringify({
+    result: 'continue',
+    message: message
+  }));
 }
 
 main().catch(() => {

@@ -133,9 +133,12 @@ async function main() {
     dead_found: result.count,
   });
 
-  // Emit warning message
+  // Emit warning message (JSON format for Claude CLI)
   const warning = formatWarning(result);
-  console.log(warning);
+  console.log(JSON.stringify({
+    result: 'continue',
+    message: warning
+  }));
 }
 
 main().catch(() => {

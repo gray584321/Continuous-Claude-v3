@@ -65,8 +65,9 @@ async function main() {
       console.log(JSON.stringify(output));
       return;
     }
-  } catch {
+  } catch (err) {
     // Daemon not running - silently ignore
+    console.error(`[post-edit-notify] Error: ${err}`);
   }
 
   console.log('{}');

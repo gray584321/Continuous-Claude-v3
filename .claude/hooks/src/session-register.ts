@@ -52,6 +52,15 @@ export function main(): void {
   // Register session in PostgreSQL
   const registerResult = registerSession(sessionId, project, '');
 
+  // Check if registration succeeded
+  if (!registerResult.success) {
+    console.log(JSON.stringify({
+      result: 'continue',
+      message: `Warning: Failed to register session in database: ${registerResult.error || 'Unknown error'}`
+    }));
+    return;
+  }
+
   // Get other active sessions
   const sessionsResult = getActiveSessions(project);
   const otherSessions = sessionsResult.sessions.filter(s => s.id !== sessionId);

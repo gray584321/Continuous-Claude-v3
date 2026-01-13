@@ -225,6 +225,7 @@ async function main() {
   }
 }
 
-main().catch(() => {
-  // Silent fail - don't block user prompts
+main().catch((err) => {
+  // Log error but don't block user prompts
+  console.error(`[memory-awareness] Error: ${err}`);
 });
