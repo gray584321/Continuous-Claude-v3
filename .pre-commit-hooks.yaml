@@ -6,6 +6,28 @@
 repos:
   - repo: local
     hooks:
+      # Auto-update documentation counts
+      - id: update-doc-counts
+        name: Auto-update documentation counts
+        description: |
+          Updates skills, hooks, and agents counts in README.md
+          to match actual filesystem counts.
+        entry: python scripts/update-doc-counts.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [push]
+        # Only run when relevant files changed
+        files: |
+          (?x)^(
+            .claude/skills/|
+            .claude/hooks/|
+            .claude/agents/|
+            README.md|
+            CONTRIBUTING.md|
+            scripts/update-doc-counts\.py
+          )
+
       - id: doc-counts-validate
         name: Validate documentation counts match reality
         description: |

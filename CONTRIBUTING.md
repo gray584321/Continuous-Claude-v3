@@ -11,6 +11,7 @@ Thank you for your interest in contributing! This guide covers how to add skills
 - [Extending TLDR](#extending-tldr)
 - [Code Style](#code-style)
 - [Testing](#testing)
+- [Documentation Validation](#documentation-validation)
 - [Pull Request Process](#pull-request-process)
 
 ---
@@ -368,6 +369,67 @@ echo '{"tool_name": "Read", "tool_input": {"file_path": "test.py"}}' | .claude/h
 
 ---
 
+## Documentation Validation
+
+This project uses automated validation to prevent documentation drift and ensure consistency between code and documentation.
+
+### Pre-commit Hooks
+
+Pre-commit hooks automatically validate and fix issues before commits:
+
+```bash
+# Install pre-commit hooks
+pre-commit install --config .pre-commit-config.yaml
+
+# Run hooks manually on all files
+pre-commit run --config .pre-commit-config.yaml --all-files
+
+# Run specific hook
+pre-commit run --config .pre-commit-config.yaml update-doc-counts
+```
+
+### Available Hooks
+
+| Hook | Purpose | When It Runs |
+|------|---------|--------------|
+| `update-doc-counts` | Auto-updates skills/hooks/agents counts in README.md | Push stage |
+| `doc-counts-validate` | Validates documented counts match actual counts | Push stage |
+| `schema-drift-check` | Validates init-db.sql against running database | Push stage |
+| `markdown-links-validate` | Checks for broken internal links | Commit/Push |
+| `yaml-consistency-check` | Validates YAML syntax and keys | Commit/Push |
+
+### CI Validation
+
+GitHub Actions runs additional validation on pull requests:
+
+| Job | Purpose |
+|-----|---------|
+| `markdownlint` | Lints markdown files for style issues |
+| `link-check` | Checks all links are valid (using lychee) |
+| `count-validation` | Verifies documented counts match reality |
+| `update-counts` | Auto-commits updated counts to PRs |
+
+### Auto-updates
+
+Documentation counts (skills, hooks, agents) are automatically updated in PRs:
+
+1. When you add/remove skills, hooks, or agents
+2. The `update-doc-counts` hook runs on push
+3. A CI job commits the updated counts to your branch
+4. Merge conflicts are avoided by running before PR merge
+
+### What Gets Auto-Updated
+
+- `README.md` - Badge counts, TOC references, section headers
+- `CONTRIBUTING.md` - Any count references
+
+Counts are derived from:
+- Skills: `.claude/skills/*/SKILL.md`
+- Hooks: `.claude/hooks/dist/*.mjs`
+- Agents: `.claude/agents/*.md`
+
+---
+
 ## Pull Request Process
 
 1. **Fork** the repository
@@ -385,6 +447,7 @@ echo '{"tool_name": "Read", "tool_input": {"file_path": "test.py"}}' | .claude/h
 
 - [ ] Tests pass
 - [ ] Documentation updated
+- [ ] Documentation counts auto-updated (CI will handle)
 - [ ] No breaking changes (or documented)
 - [ ] Follows code style
 
