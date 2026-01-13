@@ -58,6 +58,7 @@ CREATE TABLE blackboard (
 );
 
 CREATE INDEX idx_blackboard_swarm ON blackboard(swarm_id, created_at);
+CREATE INDEX idx_blackboard_sender ON blackboard(swarm_id, sender_agent);
 CREATE INDEX idx_blackboard_target ON blackboard(target_agent) WHERE target_agent IS NOT NULL;
 CREATE INDEX idx_blackboard_priority ON blackboard(priority) WHERE priority = 'critical';
 
@@ -175,6 +176,51 @@ CREATE TABLE user_preferences (
 
 CREATE INDEX idx_preferences_user ON user_preferences(user_id);
 CREATE INDEX idx_preferences_proposition ON user_preferences(user_id, proposition);
+
+-- ============================================================================
+-- CROSS-TERMINAL COORDINATION (from cross-terminal-db.md)
+-- ============================================================================
+
+-- Sessions table - tracks active Claude sessions for cross-terminal awareness
+CREATE TABLE sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project TEXT NOT NULL,
+    working_on TEXT,
+    last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_sessions_project ON sessions(project);
+CREATE INDEX idx_sessions_working ON sessions(working_on);
+CREATE INDEX idx_sessions_heartbeat ON sessions(last_heartbeat);
+
+-- File claims table - tracks file locks to prevent conflicts
+CREATE TABLE file_claims (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_file_claims_session ON file_claims(session_id);
+CREATE INDEX idx_file_claims_path ON file_claims(file_path);
+
+-- ============================================================================
+-- ARCHIVAL MEMORY (semantic memory from dynamic-recall.md)
+-- ============================================================================
+
+CREATE TABLE archival_memory (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    embedding vector(1024),  -- BGE embedding dimension
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_archival_session ON archival_memory(session_id, created_at DESC);
+CREATE INDEX idx_archival_created ON archival_memory(created_at DESC);
+CREATE INDEX idx_archival_embedding ON archival_memory USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
 -- ============================================================================
 -- FINDINGS (research/tracking findings)

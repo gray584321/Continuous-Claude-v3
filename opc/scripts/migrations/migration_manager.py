@@ -11,8 +11,10 @@ USAGE:
 """
 
 import asyncio
+import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import total_ordering
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,41 @@ _migrations_dir = Path(__file__).resolve().parent
 _project_root = _migrations_dir.parent.parent.parent
 if str(_project_root) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(_project_root))
+
+
+@dataclass
+@total_ordering
+class Migration:
+    """Represents a single database migration."""
+    id: str
+    name: str
+    path: Path
+    applied: bool = False
+    applied_at: Any = None
+    checksum: str = ""
+
+    @classmethod
+    def from_filename(cls, filename: str, base_dir: Path | None = None) -> "Migration":
+        """Create a Migration from a filename like '001_create_table.sql'."""
+        match = re.match(r"^(\d+)_([a-zA-Z0-9_]+)\.sql$", filename)
+        if not match:
+            raise ValueError(f"Invalid migration filename: {filename}")
+        path = Path(filename) if base_dir is None else base_dir / filename
+        return cls(
+            id=match.group(1),
+            name=match.group(2),
+            path=path
+        )
+
+    def __lt__(self, other: "Migration") -> bool:
+        """Compare migrations by ID numerically."""
+        return int(self.id) < int(other.id)
+
+    def __eq__(self, other: object) -> bool:
+        """Check equality based on ID."""
+        if not isinstance(other, Migration):
+            return NotImplemented
+        return self.id == other.id
 
 
 @dataclass
@@ -47,9 +84,9 @@ class MigrationManager:
     MIGRATIONS_DIR = _migrations_dir
     MIGRATION_PATTERN = re.compile(r"^(\d+)_.*\.sql$")
 
-    def __init__(self):
+    def __init__(self, migrations_dir: Path | None = None):
         """Initialize migration manager."""
-        self.migrations_dir = Path(__file__).resolve().parent
+        self.migrations_dir = migrations_dir if migrations_dir else Path(__file__).resolve().parent
         self._db_url: str | None = None
 
     @property
@@ -64,20 +101,26 @@ class MigrationManager:
             )
         return self._db_url
 
-    def get_migration_files(self) -> list[tuple[int, Path]]:
+    def get_migration_files(self) -> list[Migration]:
         """Get all migration files sorted by number.
 
         Returns:
-            List of (migration_number, Path) tuples
+            List of Migration objects sorted by ID
         """
         migrations = []
         for f in self.migrations_dir.glob("*.sql"):
-            match = self.MIGRATION_PATTERN.match(f.name)
-            if match:
-                num = int(match.group(1))
-                migrations.append((num, f))
+            try:
+                migration = Migration.from_filename(f.name, base_dir=self.migrations_dir)
+                migrations.append(migration)
+            except ValueError:
+                # Skip files that don't match the pattern
+                continue
 
-        return sorted(migrations, key=lambda x: x[0])
+        return sorted(migrations)
+
+    def get_migrations(self) -> list[Migration]:
+        """Alias for get_migration_files() for backwards compatibility."""
+        return self.get_migration_files()
 
     async def _get_applied_migrations(self) -> set[str]:
         """Get set of already applied migration names."""
@@ -115,20 +158,25 @@ class MigrationManager:
 
         return applied
 
-    async def get_pending_migrations(self) -> list[tuple[int, Path]]:
+    async def get_pending_migrations(self) -> list[Migration]:
         """Get migrations that haven't been applied yet.
 
         Returns:
-            List of pending (migration_number, Path) tuples
+            List of pending Migration objects
         """
         applied = await self._get_applied_migrations()
 
         pending = []
-        for num, path in self.get_migration_files():
-            if path.name not in applied:
-                pending.append((num, path))
+        for migration in self.get_migration_files():
+            if migration.path.name not in applied:
+                pending.append(migration)
 
         return pending
+
+    def _calculate_checksum(self, migration: Migration) -> str:
+        """Calculate checksum for a migration file."""
+        content = migration.path.read_text()
+        return hashlib.sha256(content.encode()).hexdigest()
 
     async def _apply_migration(self, conn: Any, migration_name: str, sql: str) -> bool:
         """Apply a single migration.
@@ -181,12 +229,12 @@ class MigrationManager:
         print(f"  [bold]{len(pending)}[/bold] pending migration(s)")
 
         # Read and parse each migration file
-        for num, path in pending:
-            migration_name = path.name
+        for migration in pending:
+            migration_name = migration.path.name
             print(f"\n  [dim]Applying {migration_name}...[/dim]")
 
             try:
-                sql = path.read_text()
+                sql = migration.path.read_text()
 
                 conn = await asyncpg.connect(self.db_url)
                 try:

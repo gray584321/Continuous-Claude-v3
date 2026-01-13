@@ -1,18 +1,40 @@
-"""Redis client module for connection pooling.
+"""Redis client module for connection pooling and caching.
 
 Provides async Redis client with singleton pattern.
 Uses redis.asyncio for async operations.
 
+TTL Configuration:
+    The client supports configurable time-to-live (TTL) for cached values.
+    Default TTLs are defined as constants for different cache categories.
+
 Usage:
-    from scripts.core.db.redis_client import get_redis
+    from scripts.core.db.redis_client import get_redis, DEFAULT_TTL, SESSION_TTL
     client = await get_redis()
     await client.ping()
+
+    # Set with default TTL
+    await client.set("key", "value")
+
+    # Set with custom TTL (in seconds)
+    await client.setex("key", 300, "value")
+
+    # Check TTL on a key
+    ttl = await client.ttl("key")  # -1 means no expiry, -2 means key doesn't exist
 """
 
 import os
 from typing import AsyncGenerator
 
 import redis.asyncio as redis
+
+# TTL Configuration Constants
+# Default expiration times (in seconds) for different cache categories
+
+DEFAULT_TTL: int = 3600  # 1 hour - General cache entries
+SESSION_TTL: int = 300   # 5 minutes - Session-specific data
+HEARTBEAT_TTL: int = 90  # 90 seconds - Session heartbeat (3x poll interval)
+MESSAGE_TTL: int = 60    # 1 minute - Blackboard messages
+LOCK_TTL: int = 30       # 30 seconds - Distributed locks
 
 # Global client instance
 _client: redis.Redis | None = None
