@@ -2170,7 +2170,7 @@ async def run_setup_wizard() -> None:
                     ["uv", "pip", "install", "-e", str(local_tldr_path)],
                     capture_output=True,
                     text=True,
-                    timeout=120,
+                    timeout=300,
                 )
             else:
                 # Install from PyPI
@@ -2178,7 +2178,7 @@ async def run_setup_wizard() -> None:
                     ["uv", "pip", "install", "llm-tldr"],
                     capture_output=True,
                     text=True,
-                    timeout=120,
+                    timeout=300,
                 )
 
             if result.returncode == 0:
