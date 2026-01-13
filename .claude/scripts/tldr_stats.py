@@ -278,11 +278,29 @@ def main():
     claude_stats = get_claude_stats(session_id)
     historical, global_totals = get_historical_stats()
 
-    # Extract metrics
+    # Extract metrics - prefer claude_stats, fallback to JSONL parsing
     input_tokens = claude_stats.get('total_input_tokens', 0)
     output_tokens = claude_stats.get('total_output_tokens', 0)
     actual_cost = claude_stats.get('total_cost_usd', 0)
     model_id = claude_stats.get('model_id', 'unknown')
+
+    # Fallback: if no stats file, parse JSONL directly
+    if input_tokens == 0 and output_tokens == 0:
+        model_breakdown = get_model_breakdown(session_id)
+        if model_breakdown:
+            for model, usage in model_breakdown.items():
+                input_tokens += usage.get('input', 0) + usage.get('cache_read', 0)
+                output_tokens += usage.get('output', 0)
+                # Use first model found as model_id
+                if model_id == 'unknown':
+                    model_id = model
+            # Estimate cost from JSONL data
+            # Pricing: input $3/M (sonnet default), output $15/M, cache read $0.30/M
+            cache_tokens = sum(u.get('cache_read', 0) for u in model_breakdown.values())
+            non_cache_input = input_tokens - cache_tokens
+            actual_cost = (non_cache_input / 1_000_000) * 3.0 + \
+                          (cache_tokens / 1_000_000) * 0.30 + \
+                          (output_tokens / 1_000_000) * 15.0
 
     # Price for savings estimate ($/M tokens as of Jan 2026)
     # Claude 4.5 pricing from anthropic.com/pricing:
