@@ -1459,7 +1459,7 @@ def run_update(
     console.print("\n[bold]Step 6/9: Merging settings...[/bold]")
 
     settings_path = claude_dir / "settings.json"
-    template_path = integration_source / "settings.json.bak"
+    template_path = opc_dir / "settings.json"
 
     if template_path.exists():
         success, msg = merge_settings_smart(

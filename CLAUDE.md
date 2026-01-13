@@ -259,20 +259,21 @@ The `settings.json` file contains sensitive configuration:
 | File | Contains | Safe to Commit? |
 |------|----------|-----------------|
 | `~/.claude/settings.json` | User's actual API keys, tokens, secrets | **NEVER** |
-| `settings.json.bak` (repo root) | Template with placeholder values only | **YES** |
+| `opc/settings.json` | OPC template with hooks only (no secrets) | **YES** |
 
 ### How Updates Work
 
 When running the updater (`uv run python -m scripts.setup.update`):
 
-1. Reads `settings.json.bak` from the repository (template - no secrets)
+1. Reads `opc/settings.json` (OPC template - hooks only, no secrets)
 2. Merges it into the user's existing `~/.claude/settings.json`
 3. Preserves user-specific fields:
    - `env` - user's environment variables
    - `attribution` - user's attribution settings
-   - Any user-added MCP servers or customizations
+   - `mcpServers` - user's MCP server configurations
+   - Any user-added customizations
 
-This ensures users get configuration updates without losing their secrets or environment settings.
+This ensures users get hook updates without losing their secrets, MCP servers, or environment settings.
 
 ### Git Ignore Protection
 

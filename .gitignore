@@ -106,6 +106,12 @@ opc/thoughts/
 opc/.env
 opc/:memory:/
 
+# OPC .env backups (from settings merge)
+opc/.env.backup.*
+
+# TLDR index timestamp
+.tldr_index_timestamp
+
 # OPC .claude (wizard uses root .claude, not this)
 opc/.claude/
 

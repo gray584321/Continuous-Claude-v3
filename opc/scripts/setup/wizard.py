@@ -5,6 +5,11 @@ Interactive setup wizard for configuring the Claude Continuity Kit.
 Handles prerequisite checking, database configuration, API keys,
 and environment file generation.
 
+SETTINGS MANAGEMENT:
+    Hooks are managed via opc/settings.json template file. During updates,
+    hooks are merged into ~/.claude/settings.json (preserving user settings).
+    Use --dry-run to preview what hooks will be added/updated.
+
 USAGE:
     # Interactive install (default)
     python -m scripts.setup.wizard
@@ -12,7 +17,7 @@ USAGE:
     # Update mode (pull latest, smart sync)
     python -m scripts.setup.wizard --update
 
-    # Update with dry-run (preview changes)
+    # Update with dry-run (preview changes including hooks)
     python -m scripts.setup.wizard --update --dry-run
 
     # Update with verbose output
@@ -343,6 +348,101 @@ def copy_file_if_changed(
         getattr(summary, f"{category}_updated").append(dst.name)
     summary.files_changed += 1
 
+    return True
+
+
+def merge_settings_hooks(
+    opc_settings_path: Path,
+    dst_settings_path: Path,
+    summary: UpdateSummary,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> bool:
+    """Merge hooks from opc/settings.json template into user settings.
+
+    Preserves all user settings while adding/updating hooks from the OPC template.
+
+    Args:
+        opc_settings_path: Path to opc/settings.json (template)
+        dst_settings_path: Path to ~/.claude/settings.json (user settings)
+        summary: UpdateSummary to record changes
+        dry_run: If True, only show what would change
+        verbose: If True, show detailed output
+
+    Returns:
+        True if settings were updated, False if unchanged
+    """
+    # Read template settings
+    try:
+        opc_settings = json.loads(opc_settings_path.read_text())
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        if verbose:
+            console.print(f"    [dim]Could not read template: {e}[/dim]")
+        return False
+
+    opc_hooks = opc_settings.get("hooks", {})
+
+    # Read existing user settings
+    user_settings = {}
+    if dst_settings_path.exists():
+        try:
+            user_settings = json.loads(dst_settings_path.read_text())
+        except json.JSONDecodeError:
+            console.print(f"    [yellow]Warning: Invalid JSON in {dst_settings_path}, will be overwritten[/yellow]")
+            user_settings = {}
+
+    user_hooks = user_settings.get("hooks", {})
+
+    # Merge hooks: template hooks are added, user hooks are preserved
+    merged_hooks = dict(user_hooks)  # Start with user's hooks
+    changes_made = False
+
+    for hook_name, opc_hook_config in opc_hooks.items():
+        if hook_name not in merged_hooks:
+            # New hook from template
+            merged_hooks[hook_name] = opc_hook_config
+            changes_made = True
+            if verbose:
+                console.print(f"    [green]Would add hook: {hook_name}[/green]")
+            elif dry_run:
+                console.print(f"    [green]Would add hook: {hook_name}[/green]")
+        else:
+            # Hook exists - check if config differs
+            user_config = merged_hooks[hook_name]
+            if user_config != opc_hook_config:
+                changes_made = True
+                if verbose:
+                    console.print(f"    [yellow]Would update hook: {hook_name}[/yellow]")
+                elif dry_run:
+                    console.print(f"    [yellow]Would update hook: {hook_name}[/yellow]")
+
+    # Build final settings (preserve all non-hooks user settings)
+    final_settings = dict(user_settings)
+    final_settings["hooks"] = merged_hooks
+
+    # Check if anything actually changed
+    current_content = json.dumps(user_settings, sort_keys=True) if user_settings else ""
+    new_content = json.dumps(final_settings, sort_keys=True)
+    src_hash = hashlib.md5(new_content.encode()).hexdigest()
+    dst_hash = hashlib.md5(current_content.encode()).hexdigest() if user_settings else ""
+
+    if src_hash == dst_hash:
+        if verbose:
+            console.print(f"    [dim]Unchanged: settings.json[/dim]")
+        return False
+
+    # Write merged settings
+    if not dst_settings_path.parent.exists():
+        dst_settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if dry_run:
+        console.print(f"    [yellow]Would update: settings.json (hooks merge)[/yellow]")
+    else:
+        if verbose:
+            console.print(f"    [green]Updating: settings.json (hooks merge)[/green]")
+        dst_settings_path.write_text(json.dumps(final_settings, indent=2))
+
+    summary.files_changed += 1
     return True
 
 
@@ -991,16 +1091,15 @@ def run_update_mode(
         # Step 10: Apply file updates (settings, scripts)
         console.print("\n[bold]Step 10/9: Applying file updates...[/bold]")
 
-        # Sync settings.json
+        # Sync settings.json - merge hooks from template (preserves user settings)
         opc_settings = opc_source / "settings.json"
         dst_settings = claude_dir / "settings.json"
         if opc_settings.exists():
-            console.print("\n  [bold]Settings:[/bold]")
-            copy_file_if_changed(
+            console.print("\n  [bold]Settings (hooks merge):[/bold]")
+            merge_settings_hooks(
                 opc_settings,
                 dst_settings,
                 summary,
-                "settings",
                 dry_run=dry_run,
                 verbose=verbose,
             )
