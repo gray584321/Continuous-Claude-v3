@@ -27,6 +27,7 @@ class SubgraphNode:
     output_mapper: Optional[Callable] = None
     retry_count: int = 0
     max_retries: int = 3
+    status: SubgraphState = SubgraphState.PENDING
 
 @dataclass
 class SubgraphEdge:
@@ -68,7 +69,7 @@ class SubgraphOrchestrator:
             nodes={n.id: n for n in nodes},
             edges=edges,
         )
-        self.subgraphs[execution.id] = execution
+        self.subgraphs[subgraph_id] = execution
         return execution
 
     def _get_executable_nodes(self, execution: SubgraphExecution) -> List[str]:

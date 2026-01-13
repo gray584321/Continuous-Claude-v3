@@ -52,6 +52,7 @@ async function main() {
   }
   const latestHandoff = handoffFiles[0];
   const handoffName = latestHandoff.replace(".md", "");
+  const escapedSessionName = sessionName.replace(/'/g, "''");
   const output = {
     result: "continue",
     message: `
@@ -69,7 +70,7 @@ To mark outcome and improve future sessions:
 To find handoff ID, query the database:
 
   sqlite3 .claude/cache/artifact-index/context.db \\
-    "SELECT id, file_path FROM handoffs WHERE session_name='${sessionName}' ORDER BY indexed_at DESC LIMIT 1"
+    "SELECT id, file_path FROM handoffs WHERE session_name='${escapedSessionName}' ORDER BY indexed_at DESC LIMIT 1"
 
 Outcome meanings:
   SUCCEEDED      - Task completed successfully

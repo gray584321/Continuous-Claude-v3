@@ -926,7 +926,7 @@ class MemoryServicePG:
                             ) DESC
                         ) as fts_rank
                     FROM archival_memory
-                    WHERE session_id = $1
+                    WHERE session_id IS NOT DISTINCT FROM $1
                     AND agent_id IS NOT DISTINCT FROM $2
                     AND to_tsvector('english', content) @@ plainto_tsquery('english', $4)
                 ),
@@ -936,7 +936,7 @@ class MemoryServicePG:
                         ROW_NUMBER() OVER (ORDER BY embedding <=> $5::vector) as vec_rank,
                         embedding
                     FROM archival_memory
-                    WHERE session_id = $1
+                    WHERE session_id IS NOT DISTINCT FROM $1
                     AND agent_id IS NOT DISTINCT FROM $2
                     AND embedding IS NOT NULL
                 ),

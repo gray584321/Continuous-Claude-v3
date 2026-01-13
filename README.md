@@ -6,7 +6,7 @@
 [![Claude Code](https://img.shields.io/badge/Claude-Code-orange.svg)](https://claude.ai/code)
 [![Skills](https://img.shields.io/badge/Skills-105-green.svg)](#skills-system)
 [![Agents](https://img.shields.io/badge/Agents-32-purple.svg)](#agents-system)
-[![Hooks](https://img.shields.io/badge/Hooks-32-blue.svg)](#hooks-system)
+[![Hooks](https://img.shields.io/badge/Hooks-65-blue.svg)](#hooks-system)
 
 **Continuous Claude** transforms Claude Code into a continuously learning system that maintains context across sessions, orchestrates specialized agents, and eliminates wasting tokens through intelligent code analysis.
 
@@ -20,7 +20,7 @@
 - [Core Systems](#core-systems)
   - [Skills (105)](#skills-system)
   - [Agents (32)](#agents-system)
-  - [Hooks (32)](#hooks-system)
+  - [Hooks (65)](#hooks-system)
   - [TLDR Code Analysis](#tldr-code-analysis)
   - [Memory System](#memory-system)
   - [Continuity System](#continuity-system)
@@ -184,7 +184,7 @@ uv run python -m scripts.setup.wizard
 | 2 | Check prerequisites (Docker, Python, uv) |
 | 3-5 | Database + API key configuration |
 | 6-7 | Start Docker stack, run migrations |
-| 8 | Install Claude Code integration (32 agents, 105 skills, 32 hooks) |
+| 8 | Install Claude Code integration (32 agents, 105 skills, 65 hooks) |
 | 9 | Math features (SymPy, Z3, Pint - optional) |
 | 10 | TLDR code analysis tool |
 | 11-12 | Diagnostics tools + Loogle (optional) |
@@ -593,7 +593,7 @@ Agents are specialized AI workers spawned via the Task tool. Located in `.claude
 
 Hooks intercept Claude Code at lifecycle points. Located in `.claude/hooks/`.
 
-#### Hook Events (32 hooks total)
+#### Hook Events (65 hooks total)
 
 | Event | Key Hooks | Purpose |
 |-------|-----------|---------|
@@ -614,7 +614,7 @@ Hooks intercept Claude Code at lifecycle points. Located in `.claude/hooks/`.
 | **post-edit-diagnostics** | Runs pyright/ruff after edits |
 | **memory-awareness** | Surfaces relevant learnings |
 
-[See all 32 hooks →](docs/hooks/)
+[See all 65 hooks →](docs/hooks/)
 
 ---
 
@@ -971,7 +971,7 @@ This will:
 |-----------|----------|
 | Agents (32) | ~/.claude/agents/ |
 | Skills (105) | ~/.claude/skills/ |
-| Hooks (32) | ~/.claude/hooks/ |
+| Hooks (65) | ~/.claude/hooks/ |
 | Rules | ~/.claude/rules/ |
 | Scripts | ~/.claude/scripts/ |
 | PostgreSQL | Docker container |

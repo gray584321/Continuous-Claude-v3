@@ -214,8 +214,8 @@ receivers:
     slack_configs:
       - channel: '#continuous-claude-infra'
         send_resolved: true
-        icon_emoji: ':no_entry: '{{ template "slack.title:'
-        title" . }}'
+        icon_emoji: ':no_entry:'
+        title: '{{ template "slack.title" . }}'
         text: '{{ template "slack.text" . }}'
 
   - name: 'performance-slack'
@@ -242,14 +242,14 @@ receivers:
         title: '{{ template "slack.title" . }}'
         text: '{{ template "slack.text" . }}'
 
-# Notification lifecycle hooks
-- name: 'notification-audit'
-  webhook_configs:
-    - url: 'http://audit-service:8080/alertmanager/webhook'
-      send_resolved: true
+  # Notification lifecycle hooks
+  - name: 'notification-audit'
+    webhook_configs:
+      - url: 'http://audit-service:8080/alertmanager/webhook'
+        send_resolved: true
 
-# Alert status webhook for external systems
-- name: 'status-webhook'
-  webhook_configs:
-    - url: 'http://status-service:8080/webhook'
-      send_resolved: true
+  # Alert status webhook for external systems
+  - name: 'status-webhook'
+    webhook_configs:
+      - url: 'http://status-service:8080/webhook'
+        send_resolved: true

@@ -184,11 +184,16 @@ def _execute_direct(script_path: Path) -> int:
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Execute script
+    # Execute script with MCP tools injected into global namespace
     exit_code = 0
     try:
         logger.info(f"Executing script: {script_path}")
-        runpy.run_path(str(script_path), run_name="__main__")
+        # Inject MCP tools into script's global namespace
+        script_globals = {
+            "__name__": "__main__",
+            "call_mcp_tool": manager.call_mcp_tool,
+        }
+        runpy.run_path(str(script_path), run_name="__main__", init_globals=script_globals)
         logger.info("Script execution completed")
 
     except KeyboardInterrupt:

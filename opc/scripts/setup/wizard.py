@@ -925,7 +925,7 @@ def invalidate_cache(
         return True, "No caches to clear"
 
 
-def run_update_mode(
+async def run_update_mode(
     dry_run: bool = False,
     force: bool = False,
     verbose: bool = False,
@@ -991,19 +991,18 @@ def run_update_mode(
             from scripts.migrations.migration_manager import MigrationManager
 
             manager = MigrationManager()
-            pending = manager.get_pending_migrations()
+            pending = await manager.get_pending_migrations()
 
             if pending:
                 console.print(f"  [bold]{len(pending)}[/bold] pending migration(s)...")
-                import asyncio
 
-                mig_result = asyncio.run(manager.apply_all())
-                if mig_result["applied"]:
-                    console.print(f"  [green]Applied:[/green] {', '.join(mig_result['applied'])}")
-                if mig_result["skipped"]:
-                    console.print(f"  [yellow]Skipped:[/yellow] {', '.join(mig_result['skipped'])}")
-                if mig_result["failed"]:
-                    console.print(f"  [yellow]WARN[/yellow] Some migrations failed: {mig_result['error']}")
+                mig_result = await manager.apply_all()
+                if mig_result.applied:
+                    console.print(f"  [green]Applied:[/green] {', '.join(mig_result.applied)}")
+                if mig_result.skipped:
+                    console.print(f"  [yellow]Skipped:[/yellow] {', '.join(mig_result.skipped)}")
+                if mig_result.failed:
+                    console.print(f"  [yellow]WARN[/yellow] Some migrations failed: {mig_result.error}")
             else:
                 console.print("  [dim]All migrations up to date[/dim]")
         except Exception as e:
@@ -2583,7 +2582,7 @@ def run_validate_mode(json_output: bool = False) -> dict:
     return results
 
 
-def run_migration_mode(verbose: bool = False) -> dict[str, Any]:
+async def run_migration_mode(verbose: bool = False) -> dict[str, Any]:
     """Run database migrations only (for --migrate-only mode).
 
     Args:
@@ -2609,7 +2608,7 @@ def run_migration_mode(verbose: bool = False) -> dict[str, Any]:
         console.print(f"  Found {len(migrations)} migration(s)")
 
         # Get pending migrations
-        pending = manager.get_pending_migrations()
+        pending = await manager.get_pending_migrations()
         console.print(f"  [bold]{len(pending)}[/bold] pending migration(s)")
 
         if pending:
@@ -2618,21 +2617,19 @@ def run_migration_mode(verbose: bool = False) -> dict[str, Any]:
             console.print("\n[bold]All migrations already applied[/bold]")
 
         # Run migrations
-        import asyncio
-
-        result = asyncio.run(manager.apply_all())
+        result = await manager.apply_all()
 
         # Show results
-        if result["applied"]:
-            console.print(f"  [green]Applied:[/green] {', '.join(result['applied'])}")
+        if result.applied:
+            console.print(f"  [green]Applied:[/green] {', '.join(result.applied)}")
 
-        if result["skipped"]:
-            console.print(f"  [yellow]Skipped (already applied):[/yellow] {', '.join(result['skipped'])}")
+        if result.skipped:
+            console.print(f"  [yellow]Skipped (already applied):[/yellow] {', '.join(result.skipped)}")
 
-        if result["failed"]:
-            for failure in result["failed"]:
-                console.print(f"  [red]Failed:[/red] {failure['migration_id']} - {failure['error']}")
-            return {"success": False, "error": result["error"]}
+        if result.failed:
+            for failure in result.failed:
+                console.print(f"  [red]Failed:[/red] {failure}")
+            return {"success": False, "error": result.error}
 
         console.print("\n[bold green]All migrations completed successfully![/bold green]")
         return result

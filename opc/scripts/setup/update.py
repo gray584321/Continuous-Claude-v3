@@ -802,10 +802,10 @@ def merge_settings_smart(
         # Build merged config: start with user config (preserves ALL non-hook settings)
         merged = user_config.copy()
 
-        # Merge hooks: user's hooks first, then add new ones from template
-        # This preserves user hooks and adds any new template hooks they don't have
-        merged_hooks = template_hooks.copy()
-        merged_hooks.update(user_hooks)
+        # Merge hooks: start with user hooks, then overlay template updates
+        # Template hooks take precedence to ensure users get hook updates
+        merged_hooks = user_hooks.copy()
+        merged_hooks.update(template_hooks)
         merged["hooks"] = merged_hooks
 
         # Write to user's settings.json

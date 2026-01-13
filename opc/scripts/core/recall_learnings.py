@@ -429,8 +429,8 @@ async def search_learnings_mmr(
     finally:
         await embedder.aclose()
 
-    # Use MemoryServicePG for MMR search
-    memory = MemoryServicePG(session_id="default", agent_id=None)
+    # Use MemoryServicePG for MMR search (session_id=None searches all sessions)
+    memory = MemoryServicePG(session_id=None, agent_id=None)
     await memory.connect()
 
     try:
