@@ -10,6 +10,9 @@ function isValidId(id) {
 }
 
 // src/shared/db-utils.ts
+async function publishCircuitEvent(event) {
+  console.error(`[circuit-event] ${event.cb_id}: ${event.from_state} -> ${event.to_state} at ${event.timestamp}`);
+}
 function getDbPath() {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   return join(
@@ -320,6 +323,7 @@ export {
   getActiveAgentCount,
   getDbPath,
   isValidId,
+  publishCircuitEvent,
   queryDb,
   registerAgent,
   runPythonQuery
