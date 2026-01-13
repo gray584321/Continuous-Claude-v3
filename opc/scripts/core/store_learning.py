@@ -21,6 +21,12 @@ Usage (v2 - direct content):
         --confidence "high" \
         --content "Pattern X works well for Y"
 
+Usage (with confidence gating):
+    uv run python opc/scripts/store_learning.py \
+        --session-id "abc123" \
+        --content "Pattern X works well for Y" \
+        --threshold "medium"  # Only store if confidence >= medium
+
 Learning Types:
     FAILED_APPROACH: Things that didn't work
     WORKING_SOLUTION: Successful approaches
@@ -57,6 +63,9 @@ load_dotenv()
 project_dir = os.environ.get("CLAUDE_PROJECT_DIR", str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, project_dir)
 
+# Import confidence scorer
+from scripts.core.learning_scorer import scorer, ConfidenceLevel
+
 # Valid learning types for --type parameter
 LEARNING_TYPES = [
     "FAILED_APPROACH",
@@ -71,6 +80,9 @@ LEARNING_TYPES = [
 # Valid confidence levels
 CONFIDENCE_LEVELS = ["high", "medium", "low"]
 
+# Valid threshold levels for gating
+THRESHOLD_LEVELS = ["high", "medium", "low"]
+
 # Deduplication threshold (0.85 = 85% similar)
 DEDUP_THRESHOLD = 0.85
 
@@ -82,8 +94,10 @@ async def store_learning_v2(
     context: str | None = None,
     tags: list[str] | None = None,
     confidence: str | None = None,
+    threshold: str = "medium",
+    force: bool = False,
 ) -> dict:
-    """Store learning with v2 metadata schema and deduplication.
+    """Store learning with v2 metadata schema and confidence gating.
 
     Args:
         session_id: Session identifier
@@ -92,9 +106,11 @@ async def store_learning_v2(
         context: What this learning relates to (e.g., "hook development")
         tags: List of tags for categorization
         confidence: Confidence level (high/medium/low)
+        threshold: Minimum confidence threshold to store (high/medium/low)
+        force: Store even if confidence is below threshold
 
     Returns:
-        dict with success status, memory_id, or skipped info for duplicates
+        dict with success status, memory_id, or skipped info for low confidence/duplicates
     """
     try:
         from scripts.core.db.memory_factory import (
@@ -107,6 +123,37 @@ async def store_learning_v2(
 
     if not content or not content.strip():
         return {"success": False, "error": "No content provided"}
+
+    # Score the learning using the confidence scorer
+    metadata_for_scorer = {"type": learning_type} if learning_type else {}
+    score = scorer.score(content, metadata_for_scorer)
+
+    # Auto-detect type from content if not provided
+    if not learning_type and score.suggested_type:
+        learning_type = score.suggested_type.value
+        print(f"Auto-detected type: {learning_type}")
+
+    # Confidence gating decision
+    if not scorer.should_store(score, threshold):
+        print(f"WARNING: Learning confidence {score.confidence:.2f} too low to store automatically")
+        print(f"Quality signals: {', '.join(score.quality_signals)}")
+        if not force:
+            print("Use --force to store anyway")
+            return {
+                "success": False,
+                "error": "confidence_too_low",
+                "confidence": score.confidence,
+                "confidence_level": score.confidence_level.value,
+                "quality_signals": score.quality_signals,
+                "suggested_type": score.suggested_type.value if score.suggested_type else None,
+            }
+        else:
+            print("Storing anyway due to --force flag")
+
+    # Show confidence info if requested
+    print(f"Confidence: {score.confidence:.2f} ({score.confidence_level.value})")
+    if score.quality_signals:
+        print(f"Quality signals: {', '.join(score.quality_signals)}")
 
     # Get backend - prefer postgres if DATABASE_URL is set
     if os.environ.get("DATABASE_URL"):
@@ -157,6 +204,9 @@ async def store_learning_v2(
             metadata["tags"] = tags
         if confidence:
             metadata["confidence"] = confidence
+        else:
+            # Add auto-detected confidence level
+            metadata["confidence"] = score.confidence_level.value
 
         # Store with embedding
         memory_id = await memory.store(
@@ -173,6 +223,9 @@ async def store_learning_v2(
             "backend": backend,
             "content_length": len(content),
             "embedding_dim": len(embedding),
+            "confidence": score.confidence,
+            "confidence_level": score.confidence_level.value,
+            "quality_signals": score.quality_signals,
         }
 
     except Exception as e:
@@ -298,6 +351,24 @@ async def main():
         help="Confidence level (v2)",
     )
 
+    # Confidence gating parameters
+    parser.add_argument(
+        "--threshold",
+        choices=THRESHOLD_LEVELS,
+        default="medium",
+        help="Minimum confidence threshold to store (high/medium/low)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Store even if confidence is below threshold",
+    )
+    parser.add_argument(
+        "--show-confidence",
+        action="store_true",
+        help="Show confidence score and quality signals",
+    )
+
     # Output options
     parser.add_argument("--json", action="store_true", help="Output as JSON")
 
@@ -317,6 +388,8 @@ async def main():
             context=args.context,
             tags=tags,
             confidence=args.confidence,
+            threshold=args.threshold,
+            force=args.force,
         )
     else:
         # Legacy mode
@@ -333,10 +406,16 @@ async def main():
     else:
         if result.get("skipped"):
             print(f"~ Learning skipped: {result.get('reason', 'duplicate')}")
+        elif result.get("error") == "confidence_too_low":
+            print(f"~ Learning rejected: confidence too low")
+            print(f"  Use --force to store anyway")
+            sys.exit(1)
         elif result["success"]:
             print(f"Learning stored (id: {result.get('memory_id', 'unknown')})")
             print(f"  Backend: {result.get('backend', 'unknown')}")
             print(f"  Content: {result.get('content_length', 0)} chars")
+            if args.show_confidence and "confidence" in result:
+                print(f"  Confidence: {result.get('confidence', 'N/A'):.2f}")
         else:
             print(f"Failed to store learning: {result.get('error', 'unknown')}")
             sys.exit(1)

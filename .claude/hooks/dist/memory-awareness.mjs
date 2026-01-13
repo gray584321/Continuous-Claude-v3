@@ -241,7 +241,15 @@ function checkMemoryRelevance(intent, projectDir) {
   }
 }
 async function main() {
-  const input = JSON.parse(readStdin());
+  let input = null;
+  try {
+    input = JSON.parse(readStdin());
+  } catch {
+    return;
+  }
+  if (!input || typeof input.prompt !== "string") {
+    return;
+  }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   if (process.env.CLAUDE_AGENT_ID) {
     return;
