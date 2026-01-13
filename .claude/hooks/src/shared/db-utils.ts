@@ -20,6 +20,28 @@ import type { QueryResult } from './types.js';
 export { SAFE_ID_PATTERN, isValidId } from './pattern-router.js';
 
 /**
+ * Circuit event data for publishing state transitions
+ */
+export interface CircuitEventData {
+  cb_id: string;
+  from_state: string;
+  to_state: string;
+  timestamp: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Publish a circuit breaker event for monitoring and logging.
+ *
+ * @param event - Circuit event data containing state transition info
+ * @returns Promise that resolves when event is logged
+ */
+export async function publishCircuitEvent(event: CircuitEventData): Promise<void> {
+  // Log to stderr for visibility in Claude Code console
+  console.error(`[circuit-event] ${event.cb_id}: ${event.from_state} -> ${event.to_state} at ${event.timestamp}`);
+}
+
+/**
  * Get the path to the coordination database.
  *
  * Uses CLAUDE_PROJECT_DIR environment variable if set,
