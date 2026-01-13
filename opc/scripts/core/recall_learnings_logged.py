@@ -445,7 +445,7 @@ async def search_learnings_text_only_postgres(
             SELECT id, session_id, content, metadata, created_at, 0.1 as similarity
             FROM archival_memory
             WHERE metadata->>'type' = 'session_learning'
-                AND content ILIKE $3
+                AND content ILIKE $3::text
             ORDER BY created_at DESC
             LIMIT $2
             """,
