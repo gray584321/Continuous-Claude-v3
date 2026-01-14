@@ -9,30 +9,11 @@ import { spawnSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-interface PreCompactInput {
-  session_id: string;
-  hook_event_name: string;
-  trigger: 'auto' | 'manual';
-  cwd: string;
-}
-
-interface Learning {
-  id: string;
-  content: string;
-  metadata: any;
-  created_at: string;
-}
-
-interface CoreMemory {
-  key: string;
-  value: string;
-}
-
-function readStdin(): string {
+function readStdin() {
   return readFileSync(0, 'utf-8');
 }
 
-function queryRecentLearnings(sessionId: string): Learning[] {
+function queryRecentLearnings(sessionId) {
   const opcDir = join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'opc');
 
   const result = spawnSync('uv', [
@@ -59,14 +40,13 @@ function queryRecentLearnings(sessionId: string): Learning[] {
       const output = JSON.parse(result.stdout);
       return output.results || [];
     } catch {
-      // Ignore parse errors
     }
   }
 
   return [];
 }
 
-function queryCoreMemory(sessionId: string): CoreMemory[] {
+function queryCoreMemory(sessionId) {
   const opcDir = join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'opc');
 
   const result = spawnSync('uv', [
@@ -96,7 +76,7 @@ async def get_core_memory():
 result = asyncio.run(get_core_memory())
 for key, value in result:
     print(f'{key}\\t{value}')
-    `
+`
   ], {
     encoding: 'utf-8',
     timeout: 10000,
@@ -113,17 +93,11 @@ for key, value in result:
   return [];
 }
 
-function formatHandoffContext(
-  learnings: Learning[],
-  coreMemory: CoreMemory[],
-  tokenBudget: number = 600
-): string {
+function formatHandoffContext(learnings, coreMemory, tokenBudget = 600) {
   let output = '';
 
-  // Header
   output += '## Session Learnings (auto-handoff)\n\n';
 
-  // Recent learnings (last 7 days, high confidence)
   if (learnings.length > 0) {
     output += '### Key Learnings\n';
     for (const learning of learnings.slice(0, 5)) {
@@ -134,11 +108,9 @@ function formatHandoffContext(
     output += '\n';
   }
 
-  // Core context from memory
   if (coreMemory.length > 0) {
     output += '## Core Context\n';
     for (const mem of coreMemory) {
-      // Format key-value pairs nicely
       const key = mem.key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       const value = mem.value.length > 200 ? mem.value.slice(0, 200) + '...' : mem.value;
       output += `- ${key}: ${value}\n`;
@@ -146,13 +118,11 @@ function formatHandoffContext(
     output += '\n';
   }
 
-  // Next steps suggestion
   output += '## Next Steps\n';
   output += '- Review current progress\n';
   output += '- Continue with pending tasks\n';
   output += '- Check for any blockers\n';
 
-  // Truncate if needed to fit token budget (rough estimate: 1 token = 4 chars)
   const maxChars = tokenBudget * 4;
   if (output.length > maxChars) {
     output = output.slice(0, maxChars - 50) + '\n... (truncated)';
@@ -161,13 +131,11 @@ function formatHandoffContext(
   return output;
 }
 
-function storeMemorySnapshot(
-  sessionId: string,
-  learnings: Learning[],
-  coreMemory: CoreMemory[],
-  handoffContext: string
-): boolean {
+function storeMemorySnapshot(sessionId, learnings, coreMemory, handoffContext) {
   const opcDir = join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'opc');
+
+  const coreMemoryJson = JSON.stringify(coreMemory.map(m => ({ key: m.key, value: m.value })));
+  const learningsJson = JSON.stringify(learnings.map(l => ({ id: l.id, content: l.content, metadata: l.metadata })));
 
   const result = spawnSync('uv', [
     'run',
@@ -190,7 +158,6 @@ try:
     conn = psycopg2.connect(database_url)
     cursor = conn.cursor()
 
-    # Create session_memory_snapshot table if it doesn't exist
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS session_memory_snapshot (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -203,7 +170,6 @@ try:
         )
     ''')
 
-    # Store snapshot
     cursor.execute('''
         INSERT INTO session_memory_snapshot (
             session_id, snapshot_type, core_memory_json,
@@ -213,13 +179,9 @@ try:
     ''', (
         '${sessionId}',
         'pre_compact',
-        json.dumps([{'key': m['key'], 'value': m['value']} for m in ${JSON.stringify(coreMemory)}]),
-        json.dumps([{
-            'id': l['id'],
-            'content': l['content'],
-            'metadata': l['metadata']
-        } for l in ${JSON.stringify(learnings)}]),
-        ${JSON.stringify(handoffContext)}
+        ''' + coreMemoryJson + ''',
+        ''' + learningsJson + ''',
+        ''' + JSON.stringify(handoffContext) + '''
     ))
 
     snapshot_id = cursor.fetchone()[0]
@@ -232,7 +194,7 @@ except Exception as e:
 finally:
     cursor.close()
     conn.close()
-    `
+`
   ], {
     encoding: 'utf-8',
     cwd: opcDir,
@@ -247,15 +209,13 @@ finally:
 }
 
 async function main() {
-  const input: PreCompactInput = JSON.parse(readStdin());
+  const input = JSON.parse(readStdin());
 
-  // Only run on auto compact (manual is just informational)
   if (input.trigger !== 'auto') {
     console.log('{}');
     return;
   }
 
-  // Skip for subagents
   if (process.env.CLAUDE_AGENT_ID) {
     console.log('{}');
     return;
@@ -267,21 +227,17 @@ async function main() {
   console.log('├─────────────────────────────────────────────────────────────┤');
 
   try {
-    // Query recent learnings
     console.log('│  Querying recent learnings...                                 │');
     const learnings = queryRecentLearnings(input.session_id);
     console.log(`│  Found ${learnings.length} recent learnings                        │`);
 
-    // Query core memory
     console.log('│  Querying core memory...                                     │');
     const coreMemory = queryCoreMemory(input.session_id);
     console.log(`│  Found ${coreMemory.length} core memory blocks                     │`);
 
-    // Format for handoff
     console.log('│  Formatting handoff context...                               │');
     const handoffContext = formatHandoffContext(learnings, coreMemory, 600);
 
-    // Store snapshot
     console.log('│  Storing memory snapshot...                                 │');
     const snapshotStored = storeMemorySnapshot(
       input.session_id,

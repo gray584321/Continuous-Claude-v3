@@ -9,44 +9,11 @@ import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-interface SessionStartInput {
-  session_id: string;
-  hook_event_name: string;
-  source: 'startup' | 'resume' | 'clear' | 'compact';
-  cwd: string;
-}
-
-interface Checkpoint {
-  id: string;
-  session_name: string;
-  project: string;
-  current_step: string;
-  current_task: string;
-  goal: string;
-  progress: string;
-  notes: string;
-  created_at: string;
-}
-
-interface FeatureWorkspace {
-  id: string;
-  project: string;
-  feature_name: string;
-  feature_id: string;
-  session_id: string;
-  agent_id: string;
-  status: string;
-  priority: number;
-  description: string;
-  blockers: string[];
-  goals: any[];
-}
-
-function readStdin(): string {
+function readStdin() {
   return readFileSync(0, 'utf-8');
 }
 
-function queryCheckpoints(project: string, sessionId: string): Checkpoint[] {
+function queryCheckpoints(project, sessionId) {
   const opcDir = join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'opc');
 
   const result = spawnSync('uv', [
@@ -70,7 +37,6 @@ try:
     conn = psycopg2.connect(database_url)
     cursor = conn.cursor()
 
-    # Query recent checkpoints for this project
     cursor.execute('''
         SELECT id, session_name, project, current_step, current_task,
                goal, progress, notes, created_at
@@ -102,7 +68,7 @@ except Exception as e:
 finally:
     cursor.close()
     conn.close()
-    `
+`
   ], {
     encoding: 'utf-8',
     cwd: opcDir,
@@ -117,14 +83,13 @@ finally:
     try {
       return JSON.parse(result.stdout);
     } catch {
-      // Ignore parse errors
     }
   }
 
   return [];
 }
 
-function queryFeatureWorkspaces(project: string): FeatureWorkspace[] {
+function queryFeatureWorkspaces(project) {
   const opcDir = join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'opc');
 
   const result = spawnSync('uv', [
@@ -148,7 +113,6 @@ try:
     conn = psycopg2.connect(database_url)
     cursor = conn.cursor()
 
-    # Query active feature workspaces for this project
     cursor.execute('''
         SELECT id, project, feature_name, feature_id, session_id,
                agent_id, status, priority, description, blockers, goals
@@ -182,7 +146,7 @@ except Exception as e:
 finally:
     cursor.close()
     conn.close()
-    `
+`
   ], {
     encoding: 'utf-8',
     cwd: opcDir,
@@ -197,26 +161,20 @@ finally:
     try {
       return JSON.parse(result.stdout);
     } catch {
-      // Ignore parse errors
     }
   }
 
   return [];
 }
 
-function extractProjectName(projectDir: string): string {
+function extractProjectName(projectDir) {
   const parts = projectDir.split('/');
   return parts[parts.length - 1] || 'unknown-project';
 }
 
-function formatAwarenessMessage(
-  checkpoints: Checkpoint[],
-  workspaces: FeatureWorkspace[],
-  project: string
-): string {
+function formatAwarenessMessage(checkpoints, workspaces, project) {
   let message = `## Team Awareness - ${project}\n\n`;
 
-  // Recent checkpoints
   if (checkpoints.length > 0) {
     message += `### Recent Sessions\n\n`;
     for (const checkpoint of checkpoints.slice(0, 3)) {
@@ -234,7 +192,6 @@ function formatAwarenessMessage(
     }
   }
 
-  // Active features
   if (workspaces.length > 0) {
     message += `### Active Features\n\n`;
     for (const workspace of workspaces.slice(0, 5)) {
@@ -262,15 +219,13 @@ function formatAwarenessMessage(
 }
 
 async function main() {
-  const input: SessionStartInput = JSON.parse(readStdin());
+  const input = JSON.parse(readStdin());
 
-  // Only run on resume, clear, or compact (expensive queries)
   if (!['resume', 'clear', 'compact'].includes(input.source)) {
     console.log('{}');
     return;
   }
 
-  // Skip for subagents
   if (process.env.CLAUDE_AGENT_ID) {
     console.log('{}');
     return;
@@ -280,14 +235,11 @@ async function main() {
   const project = extractProjectName(projectDir);
 
   try {
-    // Query database for awareness information
     const checkpoints = queryCheckpoints(project, input.session_id);
     const workspaces = queryFeatureWorkspaces(project);
 
-    // Format and display awareness message
     const message = formatAwarenessMessage(checkpoints, workspaces, project);
 
-    // Only show if there's actual content
     if (message.length > 50 && (checkpoints.length > 0 || workspaces.length > 0)) {
       console.log('');
       console.log(JSON.stringify({

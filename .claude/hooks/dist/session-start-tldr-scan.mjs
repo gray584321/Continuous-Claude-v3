@@ -9,30 +9,17 @@ import { spawnSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 
-interface SessionStartInput {
-  session_id: string;
-  hook_event_name: string;
-  source: 'startup' | 'resume' | 'clear' | 'compact';
-  cwd: string;
-}
-
-interface TldrResult {
-  success: boolean;
-  output: string;
-  error?: string;
-}
-
 // Validate session ID format (alphanumeric, underscore, hyphen, max 128 chars)
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 
-function validateSessionId(sessionId: string): boolean {
+function validateSessionId(sessionId) {
   return SESSION_ID_PATTERN.test(sessionId);
 }
 
 // Max content size: 10MB
 const MAX_CONTENT_SIZE = 10 * 1024 * 1024;
 
-function validateContent(content: string): { valid: boolean; error?: string } {
+function validateContent(content) {
   if (!content || !content.trim()) {
     return { valid: false, error: 'Content is empty' };
   }
@@ -42,16 +29,16 @@ function validateContent(content: string): { valid: boolean; error?: string } {
   return { valid: true };
 }
 
-function readStdin(): string {
+function readStdin() {
   return readFileSync(0, 'utf-8');
 }
 
-function runTldrCommand(args: string[], cwd: string): TldrResult {
+function runTldrCommand(args, cwd) {
   try {
     const result = spawnSync('tldr', args, {
       encoding: 'utf-8',
       cwd,
-      timeout: 60000,  // 60 second timeout for tldr commands
+      timeout: 60000,
     });
 
     if (result.status === 0) {
@@ -64,11 +51,9 @@ function runTldrCommand(args: string[], cwd: string): TldrResult {
   }
 }
 
-function extractProjectName(projectDir: string): string {
-  // Try to extract project name from git remote or directory
+function extractProjectName(projectDir) {
   const dirName = dirname(projectDir);
 
-  // Try git remote first
   const gitResult = spawnSync('git', ['remote', 'get-url', 'origin'], {
     encoding: 'utf-8',
     cwd: projectDir,
@@ -76,19 +61,16 @@ function extractProjectName(projectDir: string): string {
 
   if (gitResult.status === 0) {
     const remoteUrl = gitResult.stdout.trim();
-    // Extract project name from URL
     const match = remoteUrl.match(/[:/]([^/]+)\.git$/) || remoteUrl.match(/[:/]([^/]+)$/);
     if (match) {
       return match[1];
     }
   }
 
-  // Fallback to directory name
   return dirName.split('/').pop() || 'unknown-project';
 }
 
-function extractMetadata(tldrOutput: string): Record<string, unknown> {
-  // Try to extract file/function counts from tldr structure output
+function extractMetadata(tldrOutput) {
   try {
     const parsed = JSON.parse(tldrOutput);
     return {
@@ -96,37 +78,26 @@ function extractMetadata(tldrOutput: string): Record<string, unknown> {
       function_count: parsed.functions?.length || 0,
     };
   } catch {
-    // Not JSON or parsing failed
     return {};
   }
 }
 
-async function storeScan(
-  sessionId: string,
-  project: string,
-  scanType: string,
-  content: string,
-  metadata: Record<string, unknown>
-): Promise<boolean> {
+async function storeScan(sessionId, project, scanType, content, metadata) {
   const opcDir = join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'opc');
 
-  // Validate session ID
   if (!validateSessionId(sessionId)) {
     console.error('Invalid session ID format');
     return false;
   }
 
-  // Validate content size
   const contentValidation = validateContent(content);
   if (!contentValidation.valid) {
     console.error(`Content validation failed: ${contentValidation.error}`);
     return false;
   }
 
-  // Build metadata JSON string
   const metadataJson = JSON.stringify(metadata);
 
-  // Use stdin for content to avoid command injection
   const result = spawnSync('uv', [
     'run',
     'python',
@@ -134,12 +105,12 @@ async function storeScan(
     '--session-id', sessionId,
     '--scan-type', scanType,
     '--project', project,
-    '--content', '-',  // Read from stdin
+    '--content', '-',
     '--metadata', metadataJson,
   ], {
     encoding: 'utf-8',
     cwd: opcDir,
-    input: content,  // Pass content via stdin
+    input: content,
     env: {
       ...process.env,
       PYTHONPATH: opcDir,
@@ -151,15 +122,13 @@ async function storeScan(
 }
 
 async function main() {
-  const input: SessionStartInput = JSON.parse(readStdin());
+  const input = JSON.parse(readStdin());
 
-  // Only run on resume, clear, or compact (not startup - full scan is expensive)
   if (!['resume', 'clear', 'compact'].includes(input.source)) {
     console.log('{}');
     return;
   }
 
-  // Skip for subagents
   if (process.env.CLAUDE_AGENT_ID) {
     console.log('{}');
     return;
@@ -170,13 +139,13 @@ async function main() {
   const sessionId = input.session_id;
 
   console.log('');
-  console.log('\u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510');
-  console.log('\u2502  \u{1F4CA} CODEBASE ANALYSIS                               \u2502');
+  console.log('┌─────────────────────────────────────────────────────────────┐');
+  console.log('│  📊 CODEBASE ANALYSIS                                        │');
+  console.log('├─────────────────────────────────────────────────────────────┤');
 
   let storedCount = 0;
 
-  // Run tldr structure
-  console.log('\u2502    Scanning structure...');
+  console.log('│  Scanning structure...                                       │');
   const structureResult = runTldrCommand(['structure', projectDir, '--lang', 'typescript'], projectDir);
 
   if (structureResult.success && structureResult.output) {
@@ -185,16 +154,15 @@ async function main() {
 
     if (success) {
       storedCount++;
-      console.log('\u2502      \u2713 Structure stored');
+      console.log('│    ✓ Structure stored                                        │');
     } else {
-      console.log('\u2502      \u2717 Structure storage failed');
+      console.log('│    ✗ Structure storage failed                                │');
     }
   } else {
-    console.log('\u2502      \u2717 Structure scan failed (tldr may not be installed)');
+    console.log('│    ✗ Structure scan failed (tldr may not be installed)      │');
   }
 
-  // Run tldr arch
-  console.log('\u2502    Analyzing architecture...');
+  console.log('│  Analyzing architecture...                                   │');
   const archResult = runTldrCommand(['arch', projectDir], projectDir);
 
   if (archResult.success && archResult.output) {
@@ -202,21 +170,21 @@ async function main() {
 
     if (success) {
       storedCount++;
-      console.log('\u2502      \u2713 Architecture stored');
+      console.log('│    ✓ Architecture stored                                     │');
     } else {
-      console.log('\u2502      \u2717 Architecture storage failed');
+      console.log('│    ✗ Architecture storage failed                             │');
     }
   } else {
-    console.log('\u2502      \u2717 Architecture scan failed');
+    console.log('│    ✗ Architecture scan failed                                │');
   }
 
-  console.log('\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518');
+  console.log('└─────────────────────────────────────────────────────────────┘');
 
   if (storedCount > 0) {
     console.log('');
     console.log(JSON.stringify({
       result: 'continue',
-      message: `Codebase scan complete: ${storedCount} analyses stored for semantic search`,
+      message: `Codebase scan complete: ${storedCount} analyses stored`,
     }));
   } else {
     console.log('{}');

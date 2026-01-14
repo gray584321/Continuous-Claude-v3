@@ -9,27 +9,13 @@ import { spawnSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-interface SessionEndInput {
-  session_id: string;
-  hook_event_name: string;
-  transcript_path?: string;
-  cwd: string;
-}
-
-function readStdin(): string {
+function readStdin() {
   return readFileSync(0, 'utf-8');
 }
 
-function extractLearningsFromTranscript(transcriptPath: string): Array<{
-  type: string;
-  content: string;
-  confidence: string;
-  context: string;
-}> {
+function extractLearningsFromTranscript(transcriptPath) {
   const content = readFileSync(transcriptPath, 'utf-8');
 
-  // Pattern to match learning patterns in transcript
-  // Looks for: "What worked", "What failed", "Decisions:", "Pattern", etc.
   const learningPatterns = [
     {
       regex: /What\s+worked[:\s]+([^\n]+(?:\n(?!\s*What|Decisions|Pattern)[^\n]+)*)/gi,
@@ -58,24 +44,17 @@ function extractLearningsFromTranscript(transcriptPath: string): Array<{
     },
   ];
 
-  const learnings: Array<{
-    type: string;
-    content: string;
-    confidence: string;
-    context: string;
-  }> = [];
+  const learnings = [];
 
   for (const pattern of learningPatterns) {
     let match;
     while ((match = pattern.regex.exec(content)) !== null) {
       const extractedText = match[1].trim();
 
-      // Filter out very short or generic content
       if (extractedText.length < 20 || extractedText.includes('TODO') || extractedText.includes('FIXME')) {
         continue;
       }
 
-      // Basic confidence scoring based on content characteristics
       let confidence = 'medium';
       if (extractedText.length > 100) {
         confidence = 'high';
@@ -92,13 +71,7 @@ function extractLearningsFromTranscript(transcriptPath: string): Array<{
     }
   }
 
-  // Deduplicate learnings with similar content
-  const uniqueLearnings: Array<{
-    type: string;
-    content: string;
-    confidence: string;
-    context: string;
-  }> = [];
+  const uniqueLearnings = [];
 
   for (const learning of learnings) {
     const isDuplicate = uniqueLearnings.some(existing =>
@@ -112,11 +85,10 @@ function extractLearningsFromTranscript(transcriptPath: string): Array<{
     }
   }
 
-  return uniqueLearnings.slice(0, 10); // Limit to 10 learnings per session
+  return uniqueLearnings.slice(0, 10);
 }
 
-// Simple similarity function based on common words
-function similarity(str1: string, str2: string): number {
+function similarity(str1, str2) {
   const words1 = new Set(str1.toLowerCase().split(/\W+/).filter(w => w.length > 3));
   const words2 = new Set(str2.toLowerCase().split(/\W+/).filter(w => w.length > 3));
 
@@ -126,13 +98,7 @@ function similarity(str1: string, str2: string): number {
   return intersection.size / union.size;
 }
 
-async function storeLearning(
-  sessionId: string,
-  learningType: string,
-  content: string,
-  confidence: string,
-  context: string
-): Promise<boolean> {
+async function storeLearning(sessionId, learningType, content, confidence, context) {
   const opcDir = join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'opc');
 
   const result = spawnSync('uv', [
@@ -168,15 +134,13 @@ async function storeLearning(
 }
 
 async function main() {
-  const input: SessionEndInput = JSON.parse(readStdin());
+  const input = JSON.parse(readStdin());
 
-  // Skip if no transcript
   if (!input.transcript_path || !existsSync(input.transcript_path)) {
     console.log('{}');
     return;
   }
 
-  // Skip for subagents
   if (process.env.CLAUDE_AGENT_ID) {
     console.log('{}');
     return;
@@ -188,7 +152,6 @@ async function main() {
   console.log('├─────────────────────────────────────────────────────────────┤');
 
   try {
-    // Extract learnings from transcript
     const learnings = extractLearningsFromTranscript(input.transcript_path);
 
     if (learnings.length === 0) {
@@ -204,7 +167,6 @@ async function main() {
     let storedCount = 0;
     let skippedCount = 0;
 
-    // Store each learning
     for (const learning of learnings) {
       const success = await storeLearning(
         input.session_id,
