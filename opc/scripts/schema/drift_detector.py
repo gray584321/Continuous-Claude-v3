@@ -40,12 +40,12 @@ def get_running_tables() -> Set[str]:
 def main():
     # Determine paths relative to repo root
     repo_root = Path(__file__).parent.parent.parent
-    init_db_sql = repo_root / "opc" / "init-db.sql"
+    init_db_sql = repo_root / "docker" / "init-schema.sql"
 
     if not init_db_sql.exists():
         print(json.dumps({
             "status": "error",
-            "message": f"init-db.sql not found at {init_db_sql}"
+            "message": f"init-schema.sql not found at {init_db_sql}"
         }, indent=2))
         sys.exit(1)
 
@@ -57,9 +57,9 @@ def main():
 
     result = {
         "status": "sync" if not (only_in_init or only_in_running) else "drift",
-        "init_db_sql_tables": sorted(init_tables),
+        "init_schema_sql_tables": sorted(init_tables),
         "running_db_tables": sorted(running_tables),
-        "only_in_init_db_sql": sorted(only_in_init),
+        "only_in_init_schema_sql": sorted(only_in_init),
         "only_in_running_db": sorted(only_in_running),
     }
 
@@ -68,9 +68,9 @@ def main():
     if result["status"] == "drift":
         print(f"\nSchema drift detected!")
         if only_in_init:
-            print(f"  Tables in init-db.sql but NOT in DB: {', '.join(sorted(only_in_init))}")
+            print(f"  Tables in init-schema.sql but NOT in DB: {', '.join(sorted(only_in_init))}")
         if only_in_running:
-            print(f"  Tables in DB but NOT in init-db.sql: {', '.join(sorted(only_in_running))}")
+            print(f"  Tables in DB but NOT in init-schema.sql: {', '.join(sorted(only_in_running))}")
         sys.exit(1)
     else:
         print("\nSchema is synchronized.")

@@ -14,12 +14,12 @@ RUNTIME_MODULES = [
     "src.runtime.env_utils",
 ]
 
-# Third-party packages that must be available
-REQUIRED_PACKAGES = [
+# Third-party packages that must be available in base environment
+# (pgvector requires PostgreSQL with pgvector extension, only check in opc/ context)
+BASE_PACKAGES = [
     "aiofiles",
     "mcp",
     "pydantic",
-    "pgvector",
     "asyncpg",
     "redis",
 ]
@@ -60,7 +60,7 @@ def main():
     }
 
     # Check packages
-    for pkg in REQUIRED_PACKAGES:
+    for pkg in BASE_PACKAGES:
         available, info = check_package_importable(pkg)
         result["packages"][pkg] = {
             "available": available,

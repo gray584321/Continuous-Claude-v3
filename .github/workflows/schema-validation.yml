@@ -2,9 +2,9 @@ name: Schema Validation
 
 on:
   push:
-    paths: ['opc/init-db.sql', 'docker/init-schema.sql']
+    paths: ['docker/init-schema.sql', 'opc/scripts/schema/**']
   pull_request:
-    paths: ['opc/init-db.sql', 'docker/init-schema.sql']
+    paths: ['docker/init-schema.sql', 'opc/scripts/schema/**']
 
 jobs:
   drift-check:
