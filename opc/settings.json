@@ -73,6 +73,14 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node $HOME/.claude/hooks/dist/post-tool-use-learning.mjs"
+          }
+        ]
       }
     ],
     "PreCompact": [

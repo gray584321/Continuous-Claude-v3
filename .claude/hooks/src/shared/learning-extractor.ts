@@ -130,6 +130,41 @@ export function extractTestPassLearning(
 }
 
 /**
+ * Extract learning from an edit operation
+ */
+export function extractEditLearning(
+  event: LearningEvent,
+  recentEdits: Array<{ file: string; description: string; timestamp: number }>
+): Learning | null {
+  if (!event.tool_input || !event.tool_result) return null;
+
+  const filePath = (event.tool_input as { file_path?: string }).file_path;
+  if (!filePath) return null;
+
+  // Determine outcome
+  const isSuccess = event.tool_result.success !== false;
+  const outcome: 'success' | 'failure' = isSuccess ? 'success' : 'failure';
+
+  // Extract edit description from input
+  let description = `Edited ${filePath}`;
+  if ((event.tool_input as any).replacement_string) {
+    const replacement = (event.tool_input as any).replacement_string;
+    if (replacement.length < 100) {
+      description = `Modified ${filePath}: "${replacement.slice(0, 50)}..."`;
+    }
+  }
+
+  return {
+    what: description,
+    why: isSuccess ? 'Edit was successful' : 'Edit failed or was cancelled',
+    how: `Used ${event.tool_name} tool on ${filePath}`,
+    outcome,
+    tags: ['edit', outcome, 'auto_extracted'],
+    context: filePath
+  };
+}
+
+/**
  * Extract learning from user confirmation
  */
 export function extractConfirmationLearning(

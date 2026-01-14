@@ -80,6 +80,28 @@ function extractTestPassLearning(event, recentEdits) {
     context: output.slice(0, 200)
   };
 }
+function extractEditLearning(event, recentEdits) {
+  if (!event.tool_input || !event.tool_result) return null;
+  const filePath = event.tool_input.file_path;
+  if (!filePath) return null;
+  const isSuccess = event.tool_result.success !== false;
+  const outcome = isSuccess ? "success" : "failure";
+  let description = `Edited ${filePath}`;
+  if (event.tool_input.replacement_string) {
+    const replacement = event.tool_input.replacement_string;
+    if (replacement.length < 100) {
+      description = `Modified ${filePath}: "${replacement.slice(0, 50)}..."`;
+    }
+  }
+  return {
+    what: description,
+    why: isSuccess ? "Edit was successful" : "Edit failed or was cancelled",
+    how: `Used ${event.tool_name} tool on ${filePath}`,
+    outcome,
+    tags: ["edit", outcome, "auto_extracted"],
+    context: filePath
+  };
+}
 function extractConfirmationLearning(prompt, recentContext) {
   const confirmPatterns = [
     /\b(works?|working)\b/i,
@@ -121,6 +143,7 @@ function extractAgentLearning(agentType, agentPrompt, agentResult) {
 export {
   extractAgentLearning,
   extractConfirmationLearning,
+  extractEditLearning,
   extractPeriodicLearning,
   extractTestPassLearning,
   storeLearning
