@@ -709,6 +709,86 @@ class MockEmbeddingProvider(EmbeddingProvider):
         return self._dimension
 
 
+class OllamaEmbeddingProvider(EmbeddingProvider):
+    """Ollama embedding provider using remote GPU server.
+
+    Calls Ollama API for embedding generation. Supports models like:
+    - nomic-embed-text (768 dim)
+    - mxbai-embed-large (1024 dim)
+    - all-minilm (384 dim)
+
+    Default model: nomic-embed-text (widely available, good quality)
+
+    Requires Ollama server running at OLLAMA_HOST or http://localhost:11434
+    """
+
+    MODELS = {
+        "nomic-embed-text": 768,
+        "mxbai-embed-large": 1024,
+        "all-minilm": 384,
+        "bge-large": 1024,
+        "bge-m3": 1024,
+    }
+    DEFAULT_MODEL = "nomic-embed-text"
+
+    def __init__(
+        self,
+        model: str = DEFAULT_MODEL,
+        host: str | None = None,
+        timeout: float = 30.0,
+    ):
+        """Initialize Ollama embedding provider.
+
+        Args:
+            model: Ollama embedding model name
+            host: Ollama server URL (default: OLLAMA_HOST env or http://localhost:11434)
+            timeout: Request timeout in seconds
+        """
+        self._model = model
+        self._host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        self._timeout = timeout
+        self._dimension = self.MODELS.get(model, 768)  # Default to 768 if unknown
+
+    async def embed(self, text: str) -> list[float]:
+        """Generate embedding via Ollama API.
+
+        Args:
+            text: Text to embed
+
+        Returns:
+            Embedding vector
+        """
+        url = f"{self._host}/api/embeddings"
+        payload = {"model": self._model, "prompt": text}
+
+        async with httpx.AsyncClient(verify=False, timeout=self._timeout) as client:
+            try:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return data.get("embedding", [])
+            except httpx.HTTPError as e:
+                raise EmbeddingError(f"Ollama embedding failed: {e}")
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate embeddings for multiple texts.
+
+        Ollama doesn't have native batch API, so we process sequentially.
+
+        Args:
+            texts: List of texts to embed
+
+        Returns:
+            List of embedding vectors
+        """
+        return [await self.embed(text) for text in texts]
+
+    @property
+    def dimension(self) -> int:
+        """Return model dimension."""
+        return self._dimension
+
+
 class EmbeddingService:
     """Embedding service with caching and provider abstraction.
 
@@ -788,6 +868,10 @@ class EmbeddingService:
             local_model = model if model is not None else "Qwen/Qwen3-Embedding-0.6B"
             device = kwargs.get("device", None)
             self._provider = LocalEmbeddingProvider(model=local_model, device=device)
+        elif provider == "ollama":
+            ollama_model = model if model is not None else OllamaEmbeddingProvider.DEFAULT_MODEL
+            ollama_host = kwargs.get("host", None)
+            self._provider = OllamaEmbeddingProvider(model=ollama_model, host=ollama_host)
         else:
             raise ValueError(f"Unknown provider: {provider}")
 

@@ -178,9 +178,18 @@ async def store_learning_v2(
             session_id=session_id,
         )
 
-        # Generate embedding
-        embedder = EmbeddingService(provider="local")
-        embedding = await embedder.embed(content)
+        # Generate embedding (Ollama GPU → Local fallback)
+        embedding_provider = os.environ.get("EMBEDDING_PROVIDER", "ollama")
+        try:
+            embedder = EmbeddingService(provider=embedding_provider)
+            embedding = await embedder.embed(content)
+        except Exception:
+            # Fallback to local if Ollama unavailable
+            if embedding_provider != "local":
+                embedder = EmbeddingService(provider="local")
+                embedding = await embedder.embed(content)
+            else:
+                raise
 
         # Deduplication check: search for similar existing memories
         try:
