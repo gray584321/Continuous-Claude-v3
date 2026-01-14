@@ -8,8 +8,16 @@ Environment Loading Order (later overrides earlier):
 3. opc/.env - Project defaults (if running from parent repo)
 
 Usage:
-    from scripts.core._env import setup_environment, OPC_DIR
+    # For scripts that need imports from scripts.core.db, etc:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from scripts.core._env import setup_environment
     setup_environment()
+
+    # For simple scripts without cross-module imports:
+    from scripts.core._env import setup_environment
+    OPC_DIR = setup_environment()
 """
 from __future__ import annotations
 
@@ -25,12 +33,28 @@ OPC_DIR: Optional[Path] = None
 def _get_opc_dir_from_file(file: Path = Path(__file__)) -> Path:
     """Locate opc/ directory reliably from script location.
 
+    Checks environment variables first, then falls back to file location.
+
+    Environment Variables:
+        CLAUDE_OPC_DIR - Direct path to opc/ directory
+        CLAUDE_PROJECT_DIR - Project root (opc/ is at CLAUDE_PROJECT_DIR/opc/)
+
     Args:
         file: Path to this file (defaults to _env.py)
 
     Returns:
         Path to opc/ directory
     """
+    # Check environment variables first (these are set by hook_launcher.py)
+    if os.environ.get("CLAUDE_OPC_DIR"):
+        return Path(os.environ["CLAUDE_OPC_DIR"]).resolve()
+
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        opc = Path(os.environ["CLAUDE_PROJECT_DIR"]).resolve() / "opc"
+        if (opc / "pyproject.toml").exists():
+            return opc
+
+    # Fall back to file-based detection
     opc = file.resolve().parent.parent  # scripts/core/ → opc/
 
     # Validate project structure

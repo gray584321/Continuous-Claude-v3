@@ -33,8 +33,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# Unified environment and path setup
-from scripts.core._env import setup_environment, OPC_DIR
+# Setup path first, then import _env
+# This allows scripts to run from any directory
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.core._env import setup_environment
 
 # Load .env files and setup Python path
 # Uses CLAUDE_PROJECT_DIR env var or auto-detects from script location
