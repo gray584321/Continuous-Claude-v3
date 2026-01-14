@@ -89,6 +89,11 @@
           {
             "type": "command",
             "command": "node $HOME/.claude/hooks/dist/pre-compact-continuity.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node $HOME/.claude/hooks/dist/pre-compact-memory.mjs",
+            "timeout": 30
           }
         ]
       }
@@ -126,6 +131,16 @@
           {
             "type": "command",
             "command": "node $HOME/.claude/hooks/dist/session-start-continuity.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node $HOME/.claude/hooks/dist/session-start-tldr-scan.mjs",
+            "timeout": 120
+          },
+          {
+            "type": "command",
+            "command": "node $HOME/.claude/hooks/dist/team-awareness.mjs",
+            "timeout": 10
           }
         ]
       },
@@ -286,6 +301,11 @@
           {
             "type": "command",
             "command": "node $HOME/.claude/hooks/dist/session-end-cleanup.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node $HOME/.claude/hooks/dist/session-end-learning-extract.mjs",
+            "timeout": 30
           },
           {
             "type": "command",

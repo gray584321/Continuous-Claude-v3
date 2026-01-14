@@ -722,6 +722,14 @@ def build_typescript_hooks(hooks_dir: Path, verbose: bool = False) -> tuple[bool
             if result.returncode != 0:
                 return False, f"npm install failed: {result.stderr[:100]}"
 
+        # Clean dist directory to remove stale .js files
+        dist_dir = hooks_dir / "dist"
+        if dist_dir.exists():
+            for f in dist_dir.glob("*.js"):
+                f.unlink()  # Remove stale .js files
+            if verbose:
+                console.print("  [dim]Cleaned stale .js files from dist/[/dim]")
+
         # Build
         result = subprocess.run(
             [npm_cmd, "run", "build"],
@@ -804,10 +812,15 @@ def merge_settings_smart(
         # Build merged config: start with user config (preserves ALL non-hook settings)
         merged = user_config.copy()
 
-        # Merge hooks: start with user hooks, then overlay template updates
-        # Template hooks take precedence to ensure users get hook updates
-        merged_hooks = user_hooks.copy()
-        merged_hooks.update(template_hooks)
+        # Merge hooks: APPEND template hooks to user hooks for each category
+        # This ensures user hooks are preserved AND new template hooks are added
+        merged_hooks = {}
+        all_categories = set(user_hooks.keys()) | set(template_hooks.keys())
+        for category in all_categories:
+            user_category_hooks = user_hooks.get(category, [])
+            template_category_hooks = template_hooks.get(category, [])
+            # Combine: template hooks first, then user hooks (template takes precedence for order)
+            merged_hooks[category] = template_category_hooks + user_category_hooks
         merged["hooks"] = merged_hooks
 
         # Write to user's settings.json
@@ -816,7 +829,18 @@ def merge_settings_smart(
         if verbose:
             console.print(f"  [dim]Wrote merged settings to {settings_path}[/dim]")
 
-        new_hooks = sum(len(v) for v in template_hooks.values()) - sum(len(v) for v in user_hooks.values())
+        # Count new hooks added from template (template hooks minus duplicates in user hooks)
+        new_hooks = 0
+        for category, template_list in template_hooks.items():
+            user_list = user_hooks.get(category, [])
+            for template_hook in template_list:
+                # Check if this exact hook config already exists in user's hooks
+                is_duplicate = any(
+                    h.get("command") == template_hook.get("command")
+                    for h in user_list
+                )
+                if not is_duplicate:
+                    new_hooks += 1
         if new_hooks > 0:
             return True, f"Added {new_hooks} new hook(s) from template"
         elif user_hooks:

@@ -259,19 +259,20 @@ The `settings.json` file contains sensitive configuration:
 | File | Contains | Safe to Commit? |
 |------|----------|-----------------|
 | `~/.claude/settings.json` | User's actual API keys, tokens, secrets | **NEVER** |
-| `settings.json.bak` | Template (hooks only, no secrets) | **YES** |
+| `opc/settings.json` | Template (hooks only, no secrets) | **YES** |
 
 ### How Updates Work
 
 When running the updater (`cd opc && uv run python -m scripts.setup.update`):
 
-1. Reads `settings.json.bak` (template - hooks only, no secrets)
-2. Merges it into the user's existing `~/.claude/settings.json`
+1. Reads `opc/settings.json` (template - hooks only, no secrets)
+2. Performs additive merge: appends template hooks to user hooks for each category
 3. Preserves user-specific fields:
    - `env` - user's environment variables
    - `attribution` - user's attribution settings
    - `mcpServers` - user's MCP server configurations
    - Any user-added customizations
+4. Cleans stale `.js` files from `hooks/dist/` before rebuilding TypeScript hooks
 
 This ensures users get hook updates without losing their secrets, MCP servers, or environment settings.
 
