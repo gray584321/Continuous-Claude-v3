@@ -976,6 +976,92 @@ This will:
 | Scripts | ~/.claude/scripts/ |
 | PostgreSQL | Docker container |
 
+### Installation Mode: Copy vs Symlink
+
+Continuous Claude supports two installation modes for syncing components (hooks, skills, agents, rules) from the repo to `~/.claude/`:
+
+| Mode | Description |
+|------|-------------|
+| **Copy** (default) | Copies files to `~/.claude/` |
+| **Symlink** | Creates symlinks to repo files |
+
+#### Copy Install (Default)
+
+Files are copied from the repository to `~/.claude/`. Changes in the repo do not automatically reflect in `~/.claude/` until you run the update script again.
+
+**Pros:**
+- Isolated from repo changes (safer for users who don't modify the repo)
+- No risk of accidental repo modifications affecting their setup
+- Standard approach for end users
+
+**Cons:**
+- Requires running update to get new features
+- Can become out of sync if updates are skipped
+
+#### Symlink Install
+
+Files are symlinked from the repository location to `~/.claude/`. Changes in the repo immediately reflect in your active installation.
+
+**Pros:**
+- Always up-to-date with the repo
+- Best for contributors developing on the project
+- Changes propagate immediately without running update
+
+**Cons:**
+- Modifications to `~/.claude/` files affect the repo (use caution)
+- Repo structure changes can break symlinks
+
+#### Selecting Installation Mode
+
+The wizard asks which mode to use during installation:
+
+```
+Installation Mode:
+  1. Copy install (default - copies files to ~/.claude/)
+  2. Symlink install (links to repo - best for contributors)
+```
+
+#### Switching Between Modes
+
+```bash
+# Switch from copy to symlink
+uv run python -m scripts.setup.update --mode symlink
+
+# Switch from symlink to copy
+uv run python -m scripts.setup.update --mode copy
+```
+
+#### Verification
+
+```bash
+# Check if files are symlinks or copies
+ls -la ~/.claude/hooks/ | head -3
+
+# Symlink mode shows: lrwxr-xr-x  hooks -> /path/to/repo/.claude/hooks
+# Copy mode shows:   -rw-r--r--  hooks/ (regular directory)
+```
+
+#### For Contributors
+
+If you plan to contribute to Continuous Claude:
+
+```bash
+# 1. Fork the repository
+# 2. Clone your fork
+git clone https://github.com/YOUR_USERNAME/Continuous-Claude-v3.git
+cd Continuous-Claude-v3/opc
+
+# 3. Install with symlinks (select option 2 in wizard)
+uv run python -m scripts.setup.wizard
+
+# 4. Create a feature branch
+git checkout -b feat/new-feature
+
+# 5. Make changes - they automatically apply to ~/.claude/
+# 6. Test in Claude Code
+# 7. Commit and push
+```
+
 ### For Brownfield Projects
 
 After installation, start Claude and run:

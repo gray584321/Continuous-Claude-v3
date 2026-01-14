@@ -722,3 +722,161 @@ def install_tldr_code(verbose: bool = False) -> tuple[bool, str]:
         return True, "TLDR-Code already available"
     else:
         return False, symlink_msg
+
+
+def _copy_scripts(opc_source: Path, target_dir: Path) -> int:
+    """Copy scripts directory from OPC source to target directory.
+
+    Copies scripts/core, scripts/mathlib, scripts/tldr, and root scripts
+    needed for skills/hooks.
+
+    Args:
+        opc_source: Path to the project root .claude source directory
+        target_dir: Target .claude directory
+
+    Returns:
+        Number of scripts copied
+    """
+    scripts_copied = 0
+    target_scripts_root = target_dir / "scripts"
+    target_scripts_root.mkdir(parents=True, exist_ok=True)
+
+    # Copy scripts/core/ for memory/artifact support
+    opc_scripts_core = opc_source.parent / "opc" / "scripts" / "core"
+    target_scripts_core = target_dir / "scripts" / "core"
+    if opc_scripts_core.exists():
+        target_scripts_core.parent.mkdir(parents=True, exist_ok=True)
+        if target_scripts_core.exists():
+            shutil.rmtree(target_scripts_core)
+        shutil.copytree(opc_scripts_core, target_scripts_core)
+        scripts_copied += len(list(target_scripts_core.rglob("*.py")))
+
+    # Copy scripts/mathlib/ for math computation support
+    opc_scripts_math = opc_source.parent / "opc" / "scripts" / "mathlib"
+    target_scripts_math = target_dir / "scripts" / "mathlib"
+    if opc_scripts_math.exists():
+        if target_scripts_math.exists():
+            shutil.rmtree(target_scripts_math)
+        shutil.copytree(opc_scripts_math, target_scripts_math)
+        scripts_copied += len(list(target_scripts_math.rglob("*.py")))
+
+    # Copy scripts/tldr/ for TLDR hook integration
+    opc_scripts_tldr = opc_source.parent / "opc" / "scripts" / "tldr"
+    target_scripts_tldr = target_dir / "scripts" / "tldr"
+    if opc_scripts_tldr.exists():
+        if target_scripts_tldr.exists():
+            shutil.rmtree(target_scripts_tldr)
+        shutil.copytree(opc_scripts_tldr, target_scripts_tldr)
+        scripts_copied += len(list(target_scripts_tldr.rglob("*.py")))
+
+    # Copy individual root scripts used by skills/hooks
+    root_scripts = [
+        "ast_grep_find.py",
+        "braintrust_analyze.py",
+        "qlty_check.py",
+        "research_implement_pipeline.py",
+        "test_research_pipeline.py",
+        "multi_tool_pipeline.py",
+        "recall_temporal_facts.py",
+    ]
+    opc_scripts_root = opc_source.parent / "opc" / "scripts"
+    for script_name in root_scripts:
+        src = opc_scripts_root / script_name
+        if src.exists():
+            shutil.copy2(src, target_scripts_root / script_name)
+            scripts_copied += 1
+
+    return scripts_copied
+
+
+def install_opc_integration_symlink(
+    target_dir: Path,
+    opc_source: Path,
+) -> dict[str, Any]:
+    """Install OPC integration using symlinks for dynamic content.
+
+    Creates symlinks for: rules, skills, hooks, agents
+    Copies (not symlinks): settings.json, servers, runtime, plugins, scripts
+
+    Auto-backs up existing directories before symlinking.
+
+    Args:
+        target_dir: Target .claude directory
+        opc_source: Source OPC .claude directory
+
+    Returns:
+        dict with keys: success, symlinked_dirs, backed_up_dirs, error
+    """
+    result = {
+        "success": False,
+        "symlinked_dirs": [],
+        "backed_up_dirs": [],
+        "copied_dirs": [],
+        "error": None,
+    }
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir = target_dir.parent / ".claude.backup.symlink"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        # Directories to symlink (use symlinks for dynamic content)
+        symlink_dirs = ["rules", "skills", "hooks", "agents"]
+
+        # Directories to copy (use copies for static content)
+        copy_dirs = ["servers", "runtime", "plugins"]
+
+        # Symlink directories
+        for dir_name in symlink_dirs:
+            source_path = opc_source / dir_name
+            target_path = target_dir / dir_name
+
+            if not source_path.exists():
+                continue
+
+            # Backup existing directory before symlinking
+            if target_path.exists():
+                if target_path.is_symlink():
+                    target_path.unlink()
+                elif target_path.is_dir():
+                    backup_path = backup_dir / dir_name
+                    if backup_path.exists():
+                        shutil.rmtree(backup_path)
+                    shutil.copytree(target_path, backup_path)
+                    result["backed_up_dirs"].append(dir_name)
+                    shutil.rmtree(target_path)
+
+            # Create symlink
+            target_path.symlink_to(source_path)
+            result["symlinked_dirs"].append(dir_name)
+
+        # Copy directories
+        for dir_name in copy_dirs:
+            source_path = opc_source / dir_name
+            target_path = target_dir / dir_name
+
+            if not source_path.exists():
+                continue
+
+            if target_path.exists():
+                shutil.rmtree(target_path)
+            shutil.copytree(source_path, target_path)
+            result["copied_dirs"].append(dir_name)
+
+        # Copy settings.json (always copy, never symlink)
+        opc_settings_path = opc_source / "settings.json"
+        target_settings_path = target_dir / "settings.json"
+        if opc_settings_path.exists():
+            shutil.copy2(opc_settings_path, target_settings_path)
+
+        # Copy scripts (always copy, never symlink)
+        scripts_copied = _copy_scripts(opc_source, target_dir)
+        if scripts_copied > 0:
+            result["copied_dirs"].append("scripts")
+
+        result["success"] = True
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
