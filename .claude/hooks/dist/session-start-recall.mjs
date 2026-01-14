@@ -46,11 +46,12 @@ async function main() {
   const result = spawnSync("uv", [
     "run",
     "python",
-    "scripts/recall_learnings.py",
+    "scripts/core/recall_learnings.py",
     "--query",
     query,
     "--k",
-    "3"
+    "3",
+    "--text-only"
   ], {
     encoding: "utf-8",
     cwd: opcDir,
