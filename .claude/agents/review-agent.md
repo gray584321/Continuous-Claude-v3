@@ -160,7 +160,7 @@ Note any concerns in the Gaps section.
 
 **ALWAYS write output to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/review-agent/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ### Output Format
@@ -235,7 +235,7 @@ After writing the full report, return a brief summary:
 
 **Gaps Found:** X (Y blocking)
 
-**Report:** .claude/cache/agents/review-agent/latest-output.md
+**Report:** $CLAUDE_OUTPUT_DIR/output.md
 
 [If FAIL] **Action Required:** Address P0 gaps before proceeding
 [If PASS] **Ready for:** Handoff creation

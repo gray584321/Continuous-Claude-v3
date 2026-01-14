@@ -104,22 +104,28 @@ Task(prompt="Research best practices for X", agent="oracle")
 ### Synthesizing Results
 
 After agents complete:
-1. Read their output files
-2. Integrate findings
-3. Resolve conflicts
-4. Produce unified plan
+1. Find their output files in `$CLAUDE_PROJECT_DIR/.claude/cache/agents/{agent-type}/`
+2. Read all output files (each agent writes to a unique output.md in its execution directory)
+3. Integrate findings
+4. Resolve conflicts
+5. Produce unified plan
 
 ```bash
-# Read agent outputs
-cat .claude/cache/agents/scout/latest-output.md
-cat .claude/cache/agents/oracle/latest-output.md
+# Read all agent outputs from their unique execution directories
+for output_dir in $CLAUDE_PROJECT_DIR/.claude/cache/agents/*/; do
+    if [ -f "$output_dir/output.md" ]; then
+        echo "=== $(basename $(dirname $output_dir)) ==="
+        cat "$output_dir/output.md"
+        echo ""
+    fi
+done
 ```
 
 ## Step 5: Write Output
 
 **ALWAYS write orchestration summary to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/maestro/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Output Format

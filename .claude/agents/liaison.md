@@ -85,7 +85,7 @@ rp-cli -e 'search "retry|backoff|circuit|timeout"'
 
 **ALWAYS write review to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/liaison/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Output Format

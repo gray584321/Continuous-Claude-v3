@@ -79,7 +79,7 @@ $CLAUDE_PROJECT_DIR/thoughts/shared/plans/[feature-name]-plan.md
 
 **Also write summary to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/architect/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Output Format

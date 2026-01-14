@@ -78,7 +78,7 @@ grep -A 10 "Traceback" logs/*.log
 
 **ALWAYS write findings to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/sleuth/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Output Format

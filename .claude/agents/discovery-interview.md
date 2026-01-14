@@ -60,5 +60,5 @@ $CLAUDE_PROJECT_DIR/thoughts/shared/specs/[project-name]-requirements.md
 ## Output Location
 
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/discovery-interview/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```

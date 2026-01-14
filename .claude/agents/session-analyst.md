@@ -29,7 +29,7 @@ uv run python -m runtime.harness scripts/braintrust_analyze.py --last-session
 
 **ALWAYS write to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/session-analyst/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Rules

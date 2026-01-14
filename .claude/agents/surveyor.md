@@ -79,7 +79,7 @@ rp-cli -e 'search "TODO.*migration|FIXME.*upgrade"'
 
 **ALWAYS write review to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/surveyor/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Output Format

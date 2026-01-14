@@ -102,7 +102,7 @@ grep -rc "pattern" src/ | sort -t: -k2 -n -r | head -10
 
 **ALWAYS write findings to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/scout/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Output Format

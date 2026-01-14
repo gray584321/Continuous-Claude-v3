@@ -29,5 +29,5 @@ You are a general-purpose agent capable of handling a wide variety of tasks incl
 
 Write your findings and results to:
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/general-purpose/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```

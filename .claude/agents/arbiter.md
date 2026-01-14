@@ -92,7 +92,7 @@ grep -r "def function_name" src/
 
 **ALWAYS write report to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/arbiter/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Output Format

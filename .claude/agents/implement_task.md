@@ -57,5 +57,5 @@ $CLAUDE_PROJECT_DIR/thoughts/shared/handoffs/[task-name]-[timestamp].md
 ## Output Location
 
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/implement_task/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```

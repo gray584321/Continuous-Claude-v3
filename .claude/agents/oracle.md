@@ -103,7 +103,7 @@ uv run python -m runtime.harness scripts/llm_query.py \
 
 **ALWAYS write findings to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/oracle/latest-output.md
+$CLAUDE_OUTPUT_DIR/output.md
 ```
 
 ## Output Format
