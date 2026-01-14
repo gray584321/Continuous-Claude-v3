@@ -1932,6 +1932,7 @@ async def run_setup_wizard() -> None:
         get_global_claude_dir,
         get_opc_integration_source,
         install_opc_integration,
+        install_opc_integration_symlink,
     )
 
     claude_dir = get_global_claude_dir()  # Use global ~/.claude, not project-local
@@ -1964,74 +1965,104 @@ async def run_setup_wizard() -> None:
         console.print("\n[bold]Installation Options:[/bold]")
         console.print("  1. Full install (backup existing, install OPC, merge non-conflicting)")
         console.print("  2. Fresh install (backup existing, install OPC only)")
-        console.print("  3. Skip (keep existing configuration)")
+        console.print("  3. Symlink install (rules/skills/hooks/agents as symlinks, auto-updates with OPC)")
+        console.print("  4. Skip (keep existing configuration)")
 
-        choice = Prompt.ask("Choose option", choices=["1", "2", "3"], default="1")
+        choice = Prompt.ask("Choose option", choices=["1", "2", "3", "4"], default="1")
 
-        if choice in ("1", "2"):
+        if choice in ("1", "2", "3"):
             # Backup first
             backup_path = backup_claude_dir(claude_dir)
             if backup_path:
                 console.print(f"  [green]OK[/green] Backup created: {backup_path.name}")
 
-            # Install
-            merge = choice == "1"
-            result = install_opc_integration(
-                claude_dir,
-                opc_source,
-                merge_user_items=merge,
-                existing=existing if merge else None,
-                conflicts=conflicts if merge else None,
-            )
-
-            if result["success"]:
-                console.print(f"  [green]OK[/green] Installed {result['installed_hooks']} hooks")
-                console.print(f"  [green]OK[/green] Installed {result['installed_skills']} skills")
-                console.print(f"  [green]OK[/green] Installed {result['installed_rules']} rules")
-                console.print(f"  [green]OK[/green] Installed {result['installed_agents']} agents")
-                console.print(f"  [green]OK[/green] Installed {result['installed_servers']} MCP servers")
-                if result["merged_items"]:
-                    console.print(
-                        f"  [green]OK[/green] Merged {len(result['merged_items'])} custom items"
-                    )
-
-                # Build TypeScript hooks
-                console.print("  Building TypeScript hooks...")
-                hooks_dir = claude_dir / "hooks"
-                build_success, build_msg = build_typescript_hooks(hooks_dir)
-                if build_success:
-                    console.print(f"  [green]OK[/green] {build_msg}")
+            if choice == "3":
+                # Symlink install
+                result = install_opc_integration_symlink(claude_dir, opc_source)
+                if result["success"]:
+                    console.print(f"  [green]OK[/green] Symlinked {len(result['symlinked_dirs'])} directories: {', '.join(result['symlinked_dirs'])}")
+                    console.print(f"  [green]OK[/green] Copied {len(result['copied_dirs'])} directories: {', '.join(result['copied_dirs'])}")
+                    if result.get("backed_up_dirs"):
+                        console.print(f"  [dim]Backed up: {', '.join(result['backed_up_dirs'])}[/dim]")
                 else:
-                    console.print(f"  [yellow]WARN[/yellow] {build_msg}")
-                    console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+                    console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
             else:
-                console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
+                # Merge or Replace install
+                merge = choice == "1"
+                result = install_opc_integration(
+                    claude_dir,
+                    opc_source,
+                    merge_user_items=merge,
+                    existing=existing if merge else None,
+                    conflicts=conflicts if merge else None,
+                )
+
+                if result["success"]:
+                    console.print(f"  [green]OK[/green] Installed {result['installed_hooks']} hooks")
+                    console.print(f"  [green]OK[/green] Installed {result['installed_skills']} skills")
+                    console.print(f"  [green]OK[/green] Installed {result['installed_rules']} rules")
+                    console.print(f"  [green]OK[/green] Installed {result['installed_agents']} agents")
+                    console.print(f"  [green]OK[/green] Installed {result['installed_servers']} MCP servers")
+                    if result["merged_items"]:
+                        console.print(
+                            f"  [green]OK[/green] Merged {len(result['merged_items'])} custom items"
+                        )
+                else:
+                    console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
+
+            # Build TypeScript hooks (common for all install methods)
+            console.print("  Building TypeScript hooks...")
+            hooks_dir = claude_dir / "hooks"
+            build_success, build_msg = build_typescript_hooks(hooks_dir)
+            if build_success:
+                console.print(f"  [green]OK[/green] {build_msg}")
+            else:
+                console.print(f"  [yellow]WARN[/yellow] {build_msg}")
+                console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
         else:
             console.print("  Skipped integration installation")
     else:
         # Clean install
-        if Confirm.ask("Install Claude Code integration (hooks, skills, rules)?", default=True):
+        console.print("  No existing Claude Code configuration found.")
+        console.print("\n[bold]Installation Options:[/bold]")
+        console.print("  1. Copy install (static copy of all OPC files)")
+        console.print("  2. Symlink install (rules/skills/hooks/agents as symlinks, auto-updates with OPC)")
+
+        install_choice = Prompt.ask("Choose option", choices=["1", "2"], default="1")
+
+        if Confirm.ask("\nInstall Claude Code integration?", default=True):
             opc_source = get_opc_integration_source()
-            result = install_opc_integration(claude_dir, opc_source)
 
-            if result["success"]:
-                console.print(f"  [green]OK[/green] Installed {result['installed_hooks']} hooks")
-                console.print(f"  [green]OK[/green] Installed {result['installed_skills']} skills")
-                console.print(f"  [green]OK[/green] Installed {result['installed_rules']} rules")
-                console.print(f"  [green]OK[/green] Installed {result['installed_agents']} agents")
-                console.print(f"  [green]OK[/green] Installed {result['installed_servers']} MCP servers")
-
-                # Build TypeScript hooks
-                console.print("  Building TypeScript hooks...")
-                hooks_dir = claude_dir / "hooks"
-                build_success, build_msg = build_typescript_hooks(hooks_dir)
-                if build_success:
-                    console.print(f"  [green]OK[/green] {build_msg}")
+            if install_choice == "2":
+                # Symlink install
+                result = install_opc_integration_symlink(claude_dir, opc_source)
+                if result["success"]:
+                    console.print(f"  [green]OK[/green] Symlinked {len(result['symlinked_dirs'])} directories: {', '.join(result['symlinked_dirs'])}")
+                    console.print(f"  [green]OK[/green] Copied {len(result['copied_dirs'])} directories: {', '.join(result['copied_dirs'])}")
                 else:
-                    console.print(f"  [yellow]WARN[/yellow] {build_msg}")
-                    console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+                    console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
             else:
-                console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
+                # Copy install
+                result = install_opc_integration(claude_dir, opc_source)
+
+                if result["success"]:
+                    console.print(f"  [green]OK[/green] Installed {result['installed_hooks']} hooks")
+                    console.print(f"  [green]OK[/green] Installed {result['installed_skills']} skills")
+                    console.print(f"  [green]OK[/green] Installed {result['installed_rules']} rules")
+                    console.print(f"  [green]OK[/green] Installed {result['installed_agents']} agents")
+                    console.print(f"  [green]OK[/green] Installed {result['installed_servers']} MCP servers")
+                else:
+                    console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
+
+            # Build TypeScript hooks (common for both install methods)
+            console.print("  Building TypeScript hooks...")
+            hooks_dir = claude_dir / "hooks"
+            build_success, build_msg = build_typescript_hooks(hooks_dir)
+            if build_success:
+                console.print(f"  [green]OK[/green] {build_msg}")
+            else:
+                console.print(f"  [yellow]WARN[/yellow] {build_msg}")
+                console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
 
     # Step 9: Math Features (Optional)
     console.print("\n[bold]Step 9/12: Math Features (Optional)[/bold]")
