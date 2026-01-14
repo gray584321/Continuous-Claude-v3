@@ -20,6 +20,8 @@ OPTIONS:
     --update-npm   Update NPM dependencies only (npm update)
     --migrate      Run database migrations after git pull
     --backup/--no-backup  Enable/disable timestamped backup before settings merge (default: enabled)
+    --mode copy|symlink   Change installation mode (copy or symlink)
+    --verify              Verify installation after update (checks all components)
 
 EXAMPLES:
     uv run python -m scripts.setup.update              # Normal update
@@ -1141,6 +1143,8 @@ def run_update(
     update_npm_only: bool = False,
     embeddings_only: bool = False,
     backup: bool = True,
+    install_mode: str | None = None,
+    verify: bool = False,
 ) -> UpdateSummary:
     """Run the incremental update.
 
@@ -1158,6 +1162,8 @@ def run_update(
         update_npm_only: Update NPM dependencies only
         embeddings_only: Install embeddings dependencies only
         backup: Create timestamped backup before merging settings
+        install_mode: Switch between copy and symlink modes
+        verify: Verify installation after update
 
     Returns:
         UpdateSummary with details of changes made
@@ -1235,6 +1241,62 @@ def run_update(
         if not full_update and not update_deps_only:
             return summary
         # Otherwise continue with the rest of the update
+
+    # Handle install mode switch (copy <-> symlink)
+    if install_mode:
+        from scripts.setup.claude_integration import install_opc_integration_symlink, get_opc_integration_source
+        console.print(f"\n[bold]Switching to {install_mode} mode...[/bold]")
+        opc_source = get_opc_integration_source()
+        if install_mode == "symlink":
+            result = install_opc_integration_symlink(claude_dir, opc_source)
+        else:
+            # Copy mode - use regular install
+            from scripts.setup.claude_integration import install_opc_integration
+            result = install_opc_integration(claude_dir, opc_source)
+        if result["success"]:
+            console.print(f"  [green]OK[/green] Switched to {install_mode} mode")
+        else:
+            console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown')}")
+            summary.errors.append(f"Mode switch failed: {result.get('error')}")
+        return summary
+
+    # Handle verification
+    if verify:
+        console.print("\n[bold]Verifying installation...[/bold]")
+        verification_ok = True
+
+        # Check directories
+        for subdir in ["hooks", "skills", "rules", "agents", "servers", "runtime", "plugins"]:
+            path = claude_dir / subdir
+            if path.exists():
+                count = len(list(path.iterdir()))
+                console.print(f"  [green]OK[/green] {subdir}: {count} items")
+            else:
+                console.print(f"  [yellow]WARN[/yellow] {subdir}: missing")
+                verification_ok = False
+
+        # Check scripts
+        scripts_path = claude_dir / "scripts"
+        if scripts_path.exists():
+            core_count = len(list((scripts_path / "core").rglob("*.py"))) if (scripts_path / "core").exists() else 0
+            console.print(f"  [green]OK[/green] scripts/core: {core_count} files")
+        else:
+            console.print(f"  [yellow]WARN[/yellow] scripts: missing")
+            verification_ok = False
+
+        # Check settings.json
+        if (claude_dir / "settings.json").exists():
+            console.print(f"  [green]OK[/green] settings.json: present")
+        else:
+            console.print(f"  [yellow]WARN[/yellow] settings.json: missing")
+            verification_ok = False
+
+        if verification_ok:
+            console.print("\n  [bold green]All components verified![/bold green]")
+        else:
+            console.print("\n  [bold yellow]Some components missing - run wizard to fix[/bold yellow]")
+
+        return summary
 
     # Step 1: Git pull (unless skipped)
     console.print("\n[bold]Step 1/9: Checking git status...[/bold]")
@@ -1639,6 +1701,18 @@ def main() -> int:
         default=True,
         help="Create timestamped backup before merging settings (default: enabled)",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["copy", "symlink"],
+        default=None,
+        help="Installation mode: copy (static) or symlink (auto-updates with repo)",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify installation after update (checks all components)",
+    )
 
     args = parser.parse_args()
 
@@ -1656,6 +1730,8 @@ def main() -> int:
             update_deps_only=args.update_deps,
             update_npm_only=args.update_npm,
             embeddings_only=args.embeddings,
+            install_mode=args.mode,
+            verify=args.verify,
             backup=args.backup,
         )
 
