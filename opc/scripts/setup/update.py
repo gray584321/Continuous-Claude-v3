@@ -1424,7 +1424,8 @@ def run_update(
         ("hooks", claude_dir / "hooks", ".sh", "Shell hooks"),
         ("skills", claude_dir / "skills", None, "Skills"),
         ("rules", claude_dir / "rules", ".md", "Rules"),
-        ("agents", claude_dir / "agents", ".md", "Agents"),
+        ("agents", claude_dir / "agents", {".md", ".json"}, "Agents"),
+        ("scripts", claude_dir / "scripts", {".py", ".sh"}, "Scripts"),
         ("servers", claude_dir / "servers", None, "MCP Servers"),
     ]
 
@@ -1436,7 +1437,13 @@ def run_update(
 
     for subdir, installed_path, ext, desc in checks:
         source_path = integration_source / subdir
-        extensions = {ext} if ext else None
+        # Handle both single extension (str) and multiple extensions (set)
+        if isinstance(ext, set):
+            extensions = ext
+        elif ext:
+            extensions = {ext}
+        else:
+            extensions = None
 
         if verbose:
             console.print(f"  [dim]Checking {desc}...[/dim]")
