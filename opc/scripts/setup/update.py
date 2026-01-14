@@ -1421,6 +1421,7 @@ def run_update(
     # Define what to check: (source_subdir, installed_subdir, extensions, description)
     checks = [
         ("hooks/src", claude_dir / "hooks" / "src", ".ts", "TypeScript hooks"),
+        ("hooks/dist", claude_dir / "hooks" / "dist", {".mjs", ".js"}, "Built hooks"),
         ("hooks", claude_dir / "hooks", ".sh", "Shell hooks"),
         ("skills", claude_dir / "skills", None, "Skills"),
         ("rules", claude_dir / "rules", ".md", "Rules"),
@@ -1434,6 +1435,7 @@ def run_update(
     ts_files_updated = False
     sh_files_updated = False
     servers_updated = False
+    hooks_built_changed = False
 
     for subdir, installed_path, ext, desc in checks:
         source_path = integration_source / subdir
@@ -1458,6 +1460,8 @@ def run_update(
                 ts_files_updated = True
             elif f.endswith(".sh"):
                 sh_files_updated = True
+            elif desc == "Built hooks":
+                hooks_built_changed = True
             elif desc == "MCP Servers":
                 servers_updated = True
 
@@ -1608,7 +1612,7 @@ def run_update(
 
     if skip_build:
         console.print("  [dim]Skipped (--skip-build)[/dim]")
-    elif ts_files_updated or sh_files_updated or not all_updated:
+    elif ts_files_updated or sh_files_updated or hooks_built_changed or not all_updated:
         hooks_dir = claude_dir / "hooks"
         if (hooks_dir / "package.json").exists():
             success, msg = build_typescript_hooks(hooks_dir, verbose=verbose)
