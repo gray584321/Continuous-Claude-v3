@@ -84,9 +84,12 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Examples:
   %(prog)s                    # Interactive install wizard
+  %(prog)s --yes              # Non-interactive with defaults
   %(prog)s --update           # Pull latest and update integration
   %(prog)s --update --dry-run # Preview what would be updated
-  %(prog)s --update -f -v     # Force update with verbose output
+  %(prog)s --update -y -v     # Force update with verbose output
+  %(prog)s --mode symlink     # Switch to symlink mode
+  %(prog)s --verify           # Verify installation
         """,
     )
 
@@ -106,6 +109,8 @@ Examples:
     parser.add_argument(
         "--force",
         "-f",
+        "--yes",
+        "-y",
         action="store_true",
         help="Skip all confirmations (use defaults)",
     )
@@ -139,6 +144,20 @@ Examples:
         "--docker-auto",
         action="store_true",
         help="Auto-start Docker PostgreSQL, wait for healthy, run migrations",
+    )
+
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["copy", "symlink"],
+        default=None,
+        help="Installation mode: copy (static) or symlink (auto-updates with repo)",
+    )
+
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify installation integrity",
     )
 
     parser.add_argument(
@@ -2726,6 +2745,28 @@ async def main():
         else:
             console.print(f"\n[red]ERROR[/red] {status.error or 'PostgreSQL not available'}")
             sys.exit(1)
+
+    elif args.verify:
+        # Run verification mode
+        result = run_validate_mode(json_output=False)
+        sys.exit(0 if result["all_passed"] else 1)
+
+    elif args.mode:
+        # Run mode switch
+        from scripts.setup.claude_integration import get_global_claude_dir, install_opc_integration, install_opc_integration_symlink, get_opc_integration_source
+        claude_dir = get_global_claude_dir()
+        opc_source = get_opc_integration_source()
+        console.print(f"\n[bold]Switching to {args.mode} mode...[/bold]")
+        if args.mode == "symlink":
+            result = install_opc_integration_symlink(claude_dir, opc_source)
+        else:
+            result = install_opc_integration(claude_dir, opc_source)
+        if result["success"]:
+            console.print(f"  [green]OK[/green] Switched to {args.mode} mode")
+        else:
+            console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown')}")
+            sys.exit(1)
+        sys.exit(0)
 
     else:
         # Run interactive install wizard
