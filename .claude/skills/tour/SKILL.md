@@ -1,3 +1,9 @@
+---
+name: tour
+description: Friendly onboarding skill showing users what Claude Code can do
+model: sonnet
+---
+
 # Tour: What Can I Do?
 
 Friendly onboarding when users ask about capabilities.

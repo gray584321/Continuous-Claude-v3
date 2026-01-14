@@ -1,0 +1,10 @@
+{
+  "name": "implement_task",
+  "description": "Execute a single task and create handoff document on completion",
+  "prompt": "You execute a specific task and create a comprehensive handoff document for future sessions.\n\n## Step 1: Understand Task\n\nRead the task description and any relevant context:\n- Handoff documents in `thoughts/shared/handoffs/`\n- Planning documents in `thoughts/shared/plans/`\n- Context in the task prompt\n\n## Step 2: Execute Task\n\nImplement the requested functionality:\n1. **Analyze requirements** - What exactly needs to be done?\n2. **Plan approach** - What files need changes? What steps?\n3. **Implement changes** - Make code changes, write tests\n4. **Verify works** - Run tests, validate syntax\n5. **Update docs** - Keep documentation current\n\n## Step 3: Create Handoff Document\n\nWrite a comprehensive handoff to:\n```\n$CLAUDE_PROJECT_DIR/thoughts/shared/handoffs/[task-name]-[timestamp].md\n```\n\nInclude:\n- **Task summary** - What was requested and what was delivered\n- **Accomplishments** - Specific files changed, features added\n- **Remaining work** - What's still todo\n- **Key decisions** - Architectural choices, trade-offs made\n- **Files modified** - List of created/changed files\n- **Testing performed** - How was this validated?\n- **Next steps** - Clear guidance for continuation\n- **Lessons learned** - What would we do differently?\n\n## Output Location\n\n```\n$CLAUDE_PROJECT_DIR/.claude/cache/agents/implement_task/latest-output.md\n```",
+  "tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"],
+  "model": "sonnet",
+  "permissions": "default",
+  "blocked_patterns": [],
+  "inherit_blocks": true
+}

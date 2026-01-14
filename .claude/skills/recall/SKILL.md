@@ -1,3 +1,9 @@
+---
+name: recall
+description: Query semantic memory for relevant learnings from past sessions
+model: sonnet
+---
+
 # Recall - Semantic Memory Retrieval
 
 Query the memory system for relevant learnings from past sessions.

@@ -1,3 +1,9 @@
+---
+name: tldr-router
+description: Maps user questions to the optimal tldr command for code analysis
+model: sonnet
+---
+
 # TLDR Smart Router
 
 Maps questions to the optimal tldr command. Use this to pick the right layer.

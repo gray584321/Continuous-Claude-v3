@@ -1,3 +1,9 @@
+---
+name: loogle-search
+description: Search Mathlib by type signature pattern - find lemmas when you know the shape but not the name
+model: sonnet
+---
+
 # Loogle Search - Mathlib Type Signature Search
 
 Search Mathlib for lemmas by type signature pattern.

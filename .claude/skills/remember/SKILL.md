@@ -1,3 +1,9 @@
+---
+name: remember
+description: Store a learning, pattern, or decision in semantic memory for future recall
+model: sonnet
+---
+
 # Remember - Store Learning in Memory
 
 Store a learning, pattern, or decision in the memory system for future recall.
