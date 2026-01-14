@@ -39,7 +39,8 @@ def get_running_tables() -> Set[str]:
 
 def main():
     # Determine paths relative to repo root
-    repo_root = Path(__file__).parent.parent.parent
+    # Script is at opc/scripts/schema/drift_detector.py, go up 4 levels to repo root
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
     init_db_sql = repo_root / "docker" / "init-schema.sql"
 
     if not init_db_sql.exists():
