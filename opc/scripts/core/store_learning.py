@@ -46,25 +46,25 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dotenv import load_dotenv
+# Unified environment and path setup
+from scripts.core._env import setup_environment, OPC_DIR
+
+# Load .env files and setup Python path
+# Uses CLAUDE_PROJECT_DIR env var or auto-detects from script location
+project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+if project_dir:
+    setup_environment(project_dir)
+else:
+    setup_environment()
 
 # Setup logging
 logger = logging.getLogger(__name__)
-
-# Load global ~/.claude/.env first, then local .env
-global_env = Path.home() / ".claude" / ".env"
-if global_env.exists():
-    load_dotenv(global_env)
-load_dotenv()
-
-# Add project to path
-project_dir = os.environ.get("CLAUDE_PROJECT_DIR", str(Path(__file__).parent.parent.parent))
-sys.path.insert(0, project_dir)
 
 # Import confidence scorer
 from scripts.core.learning_scorer import scorer, ConfidenceLevel

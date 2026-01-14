@@ -33,17 +33,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+# Unified environment and path setup
+from scripts.core._env import setup_environment, OPC_DIR
 
-# Load .env files
-global_env = Path.home() / ".claude" / ".env"
-if global_env.exists():
-    load_dotenv(global_env)
-load_dotenv()
-
-# Add project root to path for imports (opc/)
-project_dir = os.environ.get("CLAUDE_PROJECT_DIR", str(Path(__file__).parent.parent.parent))
-sys.path.insert(0, project_dir)
+# Load .env files and setup Python path
+# Uses CLAUDE_PROJECT_DIR env var or auto-detects from script location
+project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+if project_dir:
+    setup_environment(project_dir)
+else:
+    setup_environment()
 
 
 def format_result_preview(content: str, max_length: int = 200) -> str:
