@@ -736,6 +736,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         model: str = DEFAULT_MODEL,
         host: str | None = None,
         timeout: float = 30.0,
+        verify_ssl: bool = True,
     ):
         """Initialize Ollama embedding provider.
 
@@ -743,11 +744,18 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
             model: Ollama embedding model name
             host: Ollama server URL (default: OLLAMA_HOST env or http://localhost:11434)
             timeout: Request timeout in seconds
+            verify_ssl: Whether to verify SSL certificates (disable only for local dev)
         """
         self._model = model
         self._host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         self._timeout = timeout
+        self._verify_ssl = verify_ssl
         self._dimension = self.MODELS.get(model, 768)  # Default to 768 if unknown
+        self._client = httpx.AsyncClient(verify=self._verify_ssl, timeout=self._timeout)
+
+    async def aclose(self) -> None:
+        """Close the HTTP client."""
+        await self._client.aclose()
 
     async def embed(self, text: str) -> list[float]:
         """Generate embedding via Ollama API.
@@ -761,14 +769,16 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         url = f"{self._host}/api/embeddings"
         payload = {"model": self._model, "prompt": text}
 
-        async with httpx.AsyncClient(verify=False, timeout=self._timeout) as client:
-            try:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                return data.get("embedding", [])
-            except httpx.HTTPError as e:
-                raise EmbeddingError(f"Ollama embedding failed: {e}")
+        try:
+            response = await self._client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            embedding = data.get("embedding")
+            if embedding is None:
+                raise EmbeddingError("Ollama response missing 'embedding' field")
+            return embedding
+        except httpx.HTTPError as e:
+            raise EmbeddingError(f"Ollama embedding failed: {e}")
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts.
